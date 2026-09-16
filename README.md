@@ -2,7 +2,7 @@
 
 面向微雪 ESP32-S3-Touch-AMOLED-1.75C 的开源圆屏应用系统。它不是只能显示时间的单一固件，而是一个可滑动、可返回桌面、可继续增加应用的中文微型系统：设备端负责触摸交互、显示、录音与本地内容，互联网服务端负责天气、语音识别、MiniMax 生成和跨设备数据同步。
 
-想先看真实界面、整体架构，或从零理解硬件、软件与烧录原理，可直接打开 [GitHub Pages 交互式项目展示与原理教程](https://scott987-cmd.github.io/ESP32-Round-Clock/)；页面源码位于 [dist/index.html](dist/index.html)，使用说明见 [docs/SHOWCASE.md](docs/SHOWCASE.md)。
+想学习类似项目怎么做，不需要先下载仓库或搭建本地环境。直接打开 [GitHub Pages 在线交互式开发原理课](https://scott987-cmd.github.io/ESP32-Round-Clock/)：它用真实圆屏案例讲硬件、固件、UI、烧录、联网、安全和 AI 服务接入。只有进入真机实践、改代码或重新烧录时，再阅读源码与 [二次开发指南](docs/DEVELOPMENT.md)。
 
 ## 已有能力
 

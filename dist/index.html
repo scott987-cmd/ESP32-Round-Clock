@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Round Clock OS：ESP32-S3 圆形触摸屏系统的脱敏成果展示、整体架构、交互式技术原理实验室与二次开发教程。">
+  <meta name="description" content="Round Clock OS：无需下载仓库即可在线学习的 ESP32-S3 圆形触摸屏项目教程，包含成果展示、架构动画、交互实验与开发原理。">
   <meta name="color-scheme" content="light">
-  <title>Round Clock OS · 交互式架构与开发原理教程</title>
+  <title>Round Clock OS · 在线交互式开发原理课</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%230b6cff'/%3E%3Ccircle cx='32' cy='32' r='21' fill='white'/%3E%3Cpath d='M32 18v15l10 6' fill='none' stroke='%230b6cff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
   <style>
     :root {
@@ -145,6 +145,32 @@
     .signal { padding:12px; border-radius:14px; background:rgba(255,255,255,.07); color:#b8c9de; font-size:12px; }
     .signal b { display:block; color:white; }
     .lesson-list { display:flex; flex-direction:column; gap:12px; }
+    .online-course { display:grid; grid-template-columns:.92fr 1.08fr; gap:24px; align-items:stretch; }
+    .course-map { padding:28px; border-radius:32px; color:white; background:linear-gradient(145deg,#0b6cff,#00a0cb 58%,#2aab6d); box-shadow:var(--shadow); }
+    .course-map h3 { margin:0 0 10px; font-size:30px; letter-spacing:-.035em; }
+    .course-map p { margin:0; color:rgba(255,255,255,.82); }
+    .course-progress { margin:24px 0 18px; height:12px; border-radius:999px; background:rgba(255,255,255,.22); overflow:hidden; }
+    .course-progress span { display:block; width:0%; height:100%; border-radius:inherit; background:white; transition:width .25s ease; }
+    .course-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:22px; }
+    .course-stat { padding:13px; border:1px solid rgba(255,255,255,.24); border-radius:16px; background:rgba(255,255,255,.12); }
+    .course-stat b { display:block; font-size:20px; }
+    .learning-goals { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:22px; }
+    .goal { min-height:122px; padding:18px; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.82); }
+    .goal b { display:block; color:var(--blue); margin-bottom:6px; }
+    .goal span { color:var(--muted); font-size:13px; }
+    .course-list { display:grid; gap:12px; }
+    .course-item { width:100%; min-height:92px; display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:center; text-align:left; padding:15px 16px; border:1px solid var(--line); border-radius:21px; background:white; cursor:pointer; }
+    .course-item:hover { transform:translateY(-2px); box-shadow:0 14px 28px rgba(28,68,108,.08); }
+    .course-item.done { border-color:rgba(42,171,109,.42); background:#f0fbf5; }
+    .course-no { width:42px; height:42px; display:grid; place-items:center; border-radius:15px; background:rgba(11,108,255,.09); color:var(--blue); font-weight:820; }
+    .course-item.done .course-no { color:white; background:var(--green); }
+    .course-item strong { display:block; font-size:16px; color:var(--ink); }
+    .course-item span { display:block; color:var(--muted); font-size:13px; margin-top:2px; }
+    .course-mark { color:var(--muted); font-size:22px; }
+    .course-detail { margin-top:18px; padding:20px; border-radius:22px; background:white; color:var(--ink); }
+    .course-detail b { display:block; margin-bottom:6px; }
+    .course-detail p { color:var(--muted); }
+    .course-detail a { display:inline-flex; margin-top:6px; color:var(--blue); font-weight:760; text-decoration:none; }
     details { border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.78); overflow:hidden; }
     summary { list-style:none; cursor:pointer; padding:21px 22px; display:flex; align-items:center; gap:15px; font-weight:760; }
     summary::-webkit-details-marker { display:none; }
@@ -271,9 +297,11 @@
       .hero-copy { text-align:center; } .lede { margin-inline:auto; } .hero-actions { justify-content:center; }
       .device-scene { min-height:520px; }
       .section-head,.proof-panel,.learn-grid,.security-grid,.cta { grid-template-columns:1fr; }
+      .online-course { grid-template-columns:1fr; }
       .arch-grid { grid-template-columns:1fr; gap:12px; }
       .arch-flow { height:52px; transform:rotate(90deg); } .arch-flow small { display:none; }
       .layer-strip,.results { grid-template-columns:repeat(2,1fr); }
+      .learning-goals { grid-template-columns:repeat(2,1fr); }
       .flash-flow,.build-grid { grid-template-columns:repeat(2,1fr); }
       .flash-step::after { display:none; }
       .cta-actions { justify-content:flex-start; }
@@ -308,6 +336,10 @@
       .cl-a,.cl-c { left:-57px; } .cl-b,.cl-d { right:-57px; }
       .signal-row { margin-top:74px; }
       .layer-strip,.flash-flow,.build-grid,.results { grid-template-columns:1fr; }
+      .learning-goals { grid-template-columns:1fr; }
+      .course-stats { grid-template-columns:1fr; }
+      .course-item { grid-template-columns:auto 1fr; }
+      .course-mark { display:none; }
       .partition-bar { flex-direction:column; } .part { min-height:52px; }
       .handshake { grid-template-columns:1fr; gap:16px; }
       .handshake-link { width:2px; height:52px; margin:auto; }
@@ -331,7 +363,7 @@
     <nav aria-label="主导航">
       <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>Round Clock OS</a>
       <div class="nav-links">
-        <a href="#results">实际效果</a><a href="#architecture">架构</a><a href="#principles">开发原理</a><a href="#lab">原理实验室</a><a href="#flashing">烧录</a><a href="#security">安全</a>
+        <a href="#course">在线学习</a><a href="#results">实际效果</a><a href="#architecture">架构</a><a href="#lab">原理实验室</a><a href="#flashing">烧录</a><a href="#security">安全</a>
         <a class="nav-github" href="https://github.com/scott987-cmd/ESP32-Round-Clock" target="_blank" rel="noreferrer">GitHub ↗</a>
       </div>
     </nav>
@@ -340,18 +372,18 @@
   <main id="main">
     <header class="shell hero" id="top">
       <div class="hero-copy reveal">
-        <span class="eyebrow">真实设备 · 开源项目 · 脱敏展示</span>
-        <h1>把一块开发板，做成<span>可扩展的圆屏系统</span></h1>
-        <p class="lede">这不是一张概念图。它已经能显示时钟、滑动切换应用、听懂语音、联网生成内容，也能继续装入新的应用。下面从「看得到的成果」讲到「为什么它能工作」。</p>
+        <span class="eyebrow">在线学习 · 真实设备 · 脱敏展示</span>
+        <h1>从零学懂<span>圆屏开发板项目怎么做</span></h1>
+        <p class="lede">这页的重点是学习，不是让你先下载代码。你可以直接在浏览器里按课程路线理解硬件、固件、UI、烧录、联网、安全和 AI 服务接入；等脑子里有地图了，再考虑真机实践。</p>
         <div class="hero-actions">
-          <a class="button primary" href="#results">先看真实效果 ↓</a>
-          <a class="button" href="#principles">从零理解原理</a>
+          <a class="button primary" href="#course">开始在线学习 ↓</a>
+          <a class="button" href="#results">先看真实效果</a>
         </div>
         <div class="metrics" aria-label="项目关键指标">
-          <div class="metric"><strong>18</strong><span>个内置应用</span></div>
-          <div class="metric"><strong>466²</strong><span>圆形 AMOLED</span></div>
-          <div class="metric"><strong>32 MB</strong><span>板载 Flash</span></div>
-          <div class="metric"><strong>双因子</strong><span>设备联网鉴权</span></div>
+          <div class="metric"><strong>6 节</strong><span>在线学习路线</span></div>
+          <div class="metric"><strong>4 个</strong><span>交互实验</span></div>
+          <div class="metric"><strong>0 后端</strong><span>纯静态学习页</span></div>
+          <div class="metric"><strong>真机</strong><span>案例来自真实设备</span></div>
         </div>
       </div>
       <div class="device-scene reveal" aria-label="设备真实时钟界面">
@@ -361,6 +393,46 @@
         <div class="float-note note-b"><strong>默认进入时钟</strong>仍可返回桌面，继续打开其他应用</div>
       </div>
     </header>
+
+    <section id="course">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Online course</p><h2>学习目标先说清楚</h2></div>
+          <p class="section-intro">这部分就是给“以后想自己做类似项目”的人准备的：先在线建立正确心智模型，再决定是否进入真机实践。浏览器会记住你的完成进度，但不会上传任何学习数据。</p>
+        </div>
+        <div class="learning-goals reveal" aria-label="学习目标">
+          <div class="goal"><b>看懂硬件</b><span>知道 ESP32-S3、屏幕、触摸、麦克风、Flash、PSRAM 分别负责什么。</span></div>
+          <div class="goal"><b>看懂软件</b><span>理解 ESP-IDF、LVGL、驱动、任务、状态保存和应用启动器之间的关系。</span></div>
+          <div class="goal"><b>看懂烧录</b><span>明白编译、Bootloader、分区表、BOOT 下载模式和 USB 烧录的真实含义。</span></div>
+          <div class="goal"><b>看懂联网</b><span>知道为什么小设备要借助服务端，以及证书、Token、限流如何保护公网接口。</span></div>
+        </div>
+        <div class="online-course reveal">
+          <div class="course-map">
+            <h3>先学原理，再动代码</h3>
+            <p>在线阶段不要求安装 ESP‑IDF、不要求下载仓库、不要求连接开发板。目标是让你知道每个技术点为什么存在、常见问题在哪里。</p>
+            <div class="course-progress" aria-label="在线学习进度"><span id="courseProgress"></span></div>
+            <div class="course-stats">
+              <div class="course-stat"><b id="courseDone">0/6</b><span>已完成</span></div>
+              <div class="course-stat"><b>25 分钟</b><span>建议学习时长</span></div>
+              <div class="course-stat"><b>0 后端</b><span>GitHub Pages 静态托管</span></div>
+            </div>
+            <div class="course-detail" id="courseDetail">
+              <b>怎么使用这门小课</b>
+              <p>按顺序点击右侧课程。每节课会跳到页面里的对应互动模块，学习进度只保存在当前浏览器，不需要账号、不需要下载仓库，也不需要额外服务端。</p>
+              <a href="#results">从真实效果开始</a>
+            </div>
+          </div>
+          <div class="course-list" aria-label="在线学习课程列表">
+            <button class="course-item" data-course="0" data-target="results"><span class="course-no">1</span><span><strong>先看成品</strong><span>知道这块圆屏最后能做成什么样。</span></span><span class="course-mark">○</span></button>
+            <button class="course-item" data-course="1" data-target="architecture"><span class="course-no">2</span><span><strong>看懂三端架构</strong><span>圆屏、服务端、Mac 助手分别负责什么。</span></span><span class="course-mark">○</span></button>
+            <button class="course-item" data-course="2" data-target="principles"><span class="course-no">3</span><span><strong>建立硬件心智模型</strong><span>芯片、屏幕、触摸、麦克风和存储怎么协作。</span></span><span class="course-mark">○</span></button>
+            <button class="course-item" data-course="3" data-target="lab"><span class="course-no">4</span><span><strong>玩交互实验室</strong><span>理解请求链路、DMA、PSRAM、Flash 的边界。</span></span><span class="course-mark">○</span></button>
+            <button class="course-item" data-course="4" data-target="flashing"><span class="course-no">5</span><span><strong>理解烧录原理</strong><span>知道 BOOT、USB、分区和启动流程各自的作用。</span></span><span class="course-mark">○</span></button>
+            <button class="course-item" data-course="5" data-target="security"><span class="course-no">6</span><span><strong>掌握安全边界</strong><span>明白公网服务、证书、Token 和物理风险。</span></span><span class="course-mark">○</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section id="results">
       <div class="shell">
@@ -643,8 +715,8 @@
     </section>
 
     <div class="shell cta reveal">
-      <div><p class="kicker" style="color:#b9e5ff">OPEN SOURCE</p><h2>从成果看懂原理，再从原理开始二次开发。</h2><p>完整固件、服务端、macOS 助手、测试与部署文档均已整理在公开仓库。</p></div>
-      <div class="cta-actions"><a class="button" href="https://github.com/scott987-cmd/ESP32-Round-Clock" target="_blank" rel="noreferrer">打开 GitHub ↗</a><a class="button secondary" href="https://github.com/scott987-cmd/ESP32-Round-Clock/blob/main/docs/DEVELOPMENT.md" target="_blank" rel="noreferrer">二次开发指南</a></div>
+      <div><p class="kicker" style="color:#b9e5ff">LEARN ONLINE FIRST</p><h2>先在 GitHub Pages 里学懂，再决定要不要动手烧录。</h2><p>这套在线教程是纯静态页面，不单独构建服务端；只有进入真机实践、改代码或重新烧录时，才需要打开 GitHub 查看源码和开发文档。</p></div>
+      <div class="cta-actions"><a class="button" href="#course">回到在线课程</a><a class="button secondary" href="https://github.com/scott987-cmd/ESP32-Round-Clock/blob/main/docs/DEVELOPMENT.md" target="_blank" rel="noreferrer">真机实践指南</a></div>
     </div>
   </main>
 
@@ -668,6 +740,40 @@
       }, 130);
     }));
     proofImage.style.transition = 'opacity .18s ease';
+
+    const courseItems = [...document.querySelectorAll('.course-item')];
+    const courseProgress = document.getElementById('courseProgress');
+    const courseDone = document.getElementById('courseDone');
+    const courseDetail = document.getElementById('courseDetail');
+    const courseCopy = [
+      ['先看成品', '你会先获得直觉：圆屏系统不是单个时钟，而是一个可返回桌面、可扩展应用、可联网生成内容的小系统。', 'results'],
+      ['看懂三端架构', '重点看哪些事放在设备，哪些事放在服务端，哪些事交给可选 Mac 助手。以后做新应用，先决定边界。', 'architecture'],
+      ['建立硬件心智模型', '把 ESP32-S3 想成中心大脑，外设通过不同总线连接。理解这一步，很多花屏、卡顿、录音异常就不再神秘。', 'principles'],
+      ['玩交互实验室', '建议至少点完五层模型、切换一次语音请求链路，并完成 DMA 内存小游戏。它会帮你形成嵌入式开发的资源意识。', 'lab'],
+      ['理解烧录原理', '这里解释编译、下载模式、USB 写 Flash、Bootloader 启动应用。以后遇到需要按 BOOT，就知道不是玄学。', 'flashing'],
+      ['掌握安全边界', '公网服务不是靠隐藏地址保护，而是靠证书、Token、速率限制、后端内网监听和敏感信息隔离。', 'security']
+    ];
+    const savedCourse = new Set(JSON.parse(localStorage.getItem('roundClockCourseDone') || '[]'));
+    function renderCourse() {
+      courseItems.forEach(item => {
+        const done = savedCourse.has(item.dataset.course);
+        item.classList.toggle('done', done);
+        item.querySelector('.course-mark').textContent = done ? '✓' : '○';
+      });
+      const doneCount = savedCourse.size;
+      courseDone.textContent = `${doneCount}/${courseItems.length}`;
+      courseProgress.style.width = `${Math.round(doneCount / courseItems.length * 100)}%`;
+    }
+    courseItems.forEach(item => item.addEventListener('click', () => {
+      const index = item.dataset.course;
+      const [title, body, target] = courseCopy[Number(index)];
+      savedCourse.add(index);
+      localStorage.setItem('roundClockCourseDone', JSON.stringify([...savedCourse]));
+      renderCourse();
+      courseDetail.innerHTML = `<b>${title}</b><p>${body}</p><a href="#${target}">进入这一节</a>`;
+      document.getElementById(target).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
+    renderCourse();
 
     const labTabs = [...document.querySelectorAll('.lab-tab')];
     const labPanels = [...document.querySelectorAll('.lab-panel')];
