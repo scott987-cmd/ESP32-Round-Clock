@@ -1,0 +1,42 @@
+[Unit]
+Description=ESP32 round clock wallpaper internal backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=espclock
+Group=espclock
+EnvironmentFile=-/etc/esp32-wallpaper.env
+Environment=WALLPAPER_STATE_DIR=/var/lib/esp32-wallpaper
+Environment=WALLPAPER_DEFAULT_IMAGE=/opt/esp32-wallpaper/default.png
+ExecStart=/usr/bin/python3 /opt/esp32-wallpaper/wallpaper_service.py serve --host 127.0.0.1 --port 18080
+Restart=on-failure
+RestartSec=5
+StateDirectory=esp32-wallpaper
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/esp32-wallpaper
+UMask=0077
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+RestrictNamespaces=true
+
+[Install]
+WantedBy=multi-user.target

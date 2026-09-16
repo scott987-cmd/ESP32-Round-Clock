@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.roundclock.avatar</string>
+<key>ProgramArguments</key><array><string>__ROUND_AVATAR_EXECUTABLE__</string></array>
+<key>RunAtLoad</key><true/>
+<key>ProcessType</key><string>Interactive</string>
+<key>StandardOutPath</key><string>__ROUND_AVATAR_LOG__</string>
+<key>StandardErrorPath</key><string>__ROUND_AVATAR_ERROR_LOG__</string>
+</dict></plist>

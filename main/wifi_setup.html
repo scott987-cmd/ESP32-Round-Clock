@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>圆屏 · 无线网络</title>
+<style>body{margin:0;background:#f4f6fa;color:#202735;font:17px system-ui,sans-serif}main{max-width:420px;margin:8vh auto;padding:28px}h1{font-size:30px;margin-bottom:8px}p{line-height:1.65;color:#556174}label{display:block;margin:24px 0 8px}input,select,button{box-sizing:border-box;width:100%;padding:16px;border-radius:16px;border:1px solid #d6dce5;font:inherit;background:white}button{background:#147df5;color:white;border:0;margin-top:24px;font-weight:600}button:disabled{opacity:.45}.secondary{background:#e6edfa;color:#1456a8}#status{min-height:58px}small{color:#6b7381}</style>
+<main><h1>连接新的 Wi-Fi</h1><p>在手机上输入，圆屏帮你记住。<br>仅支持 2.4 GHz 网络。</p>
+<form id="form"><label for="networks">附近网络</label><select id="networks"><option value="">手动输入网络名</option></select><button type="button" class="secondary" id="scan">重新扫描</button>
+<label for="ssid">网络名称</label><input id="ssid" required autocomplete="off" placeholder="Wi-Fi 名称">
+<label for="password">网络密码</label><input id="password" type="password" maxlength="63" autocomplete="new-password" placeholder="开放网络可留空">
+<button id="connect">连接并保存</button></form><p id="status" role="status">正在连接设备...</p><small>密码只发送到身边的圆屏，不上传服务器。连接失败会保留原网络。热点会在 5 分钟后关闭。</small></main>
+<script>
+let token='',busy=false,submitted=false;
+const $=id=>document.getElementById(id), message=s=>$('status').textContent=s;
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'X-Setup-Token':token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});if(!r.ok)throw Error('设备忙或请求无效，请稍后重试');return r.json()}
+async function scan(){if(busy)return;$('scan').disabled=true;try{const rows=await api('/networks');$('networks').replaceChildren(new Option('手动输入网络名',''));for(const n of rows)$('networks').add(new Option(n.ssid+(n.secured?' · 加密':''),n.ssid));message('选择一个网络，或手动输入隐藏网络名称。')}catch(e){message(e.message)}finally{$('scan').disabled=false}}
+$('networks').onchange=()=>{$('ssid').value=$('networks').value};$('scan').onclick=scan;
+$('form').onsubmit=async e=>{e.preventDefault();const ssid=$('ssid').value,password=$('password').value;if(new TextEncoder().encode(ssid).length>32 || new TextEncoder().encode(password).length>63 || (password.length && password.length<8)){message('网络名最多 32 字节，密码为 8 至 63 字节。');return}busy=true;$('connect').disabled=true;message('正在连接，请稍候...');try{await api('/connect',{ssid,password});submitted=true;$('password').value=''}catch(e){busy=false;$('connect').disabled=false;message(e.message)}};
+(async()=>{try{token=(await(await fetch('/session')).json()).token;await scan()}catch(e){message('请连接圆屏热点，再打开 http://192.168.4.1')}})();
+setInterval(async()=>{if(!token||!submitted)return;try{const s=await api('/status');message(s.message);if(!s.testing){busy=false;$('connect').disabled=false;if(s.message.includes('成功')){submitted=false;$('form').hidden=true;message('连接成功！可以让手机切回原来的 Wi-Fi，圆屏热点即将关闭。')}}}catch(e){message('热点已关闭或连接中断，请查看圆屏上的连接结果。')}},2000);
+</script></html>

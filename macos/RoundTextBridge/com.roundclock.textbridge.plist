@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roundclock.textbridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__ROUND_TEXT_BRIDGE_EXECUTABLE__</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__ROUND_TEXT_BRIDGE_WORKING_DIRECTORY__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardOutPath</key>
+    <string>__ROUND_TEXT_BRIDGE_LOG__</string>
+    <key>StandardErrorPath</key>
+    <string>__ROUND_TEXT_BRIDGE_ERROR_LOG__</string>
+</dict>
+</plist>

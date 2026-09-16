@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Round Clock OS：ESP32-S3 圆形触摸屏系统的脱敏成果展示、整体架构与零基础开发教程。">
+  <meta name="color-scheme" content="light">
+  <title>Round Clock OS · 架构、成果与开发原理</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%230b6cff'/%3E%3Ccircle cx='32' cy='32' r='21' fill='white'/%3E%3Cpath d='M32 18v15l10 6' fill='none' stroke='%230b6cff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --ink: #0c1729;
+      --muted: #53647a;
+      --line: rgba(15, 42, 74, .12);
+      --paper: #f6f9fc;
+      --white: rgba(255,255,255,.84);
+      --blue: #0b6cff;
+      --cyan: #00a8d6;
+      --green: #2aab6d;
+      --orange: #ff8a34;
+      --shadow: 0 24px 70px rgba(20, 61, 105, .13);
+      --radius: 28px;
+      --max: 1180px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 3% 8%, rgba(84,190,255,.20), transparent 28rem),
+        radial-gradient(circle at 95% 18%, rgba(255,178,89,.17), transparent 30rem),
+        linear-gradient(180deg, #fbfdff 0%, var(--paper) 45%, #fff 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    img { max-width: 100%; display: block; }
+    a { color: inherit; }
+    button, summary { font: inherit; }
+    .skip { position: absolute; left: -9999px; }
+    .skip:focus { left: 18px; top: 18px; z-index: 100; background: white; padding: 10px 14px; border-radius: 10px; }
+    .nav-wrap {
+      position: sticky; top: 0; z-index: 50; padding: 14px 18px 0;
+    }
+    nav {
+      max-width: var(--max); margin: auto; height: 58px; padding: 0 14px 0 20px;
+      display: flex; align-items: center; justify-content: space-between; gap: 20px;
+      border: 1px solid rgba(255,255,255,.8); border-radius: 18px;
+      background: rgba(255,255,255,.74); backdrop-filter: blur(22px) saturate(160%);
+      box-shadow: 0 10px 36px rgba(31,75,117,.10);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 760; letter-spacing: -.02em; text-decoration: none; }
+    .brand-mark { width: 28px; height: 28px; border-radius: 50%; background: conic-gradient(from 210deg, var(--blue), #6fc7ff, var(--orange), var(--blue)); box-shadow: inset 0 0 0 6px white, 0 3px 10px rgba(11,108,255,.25); }
+    .nav-links { display: flex; gap: 3px; align-items: center; }
+    .nav-links a { text-decoration: none; color: var(--muted); padding: 8px 11px; border-radius: 10px; font-size: 14px; }
+    .nav-links a:hover, .nav-links a.active { color: var(--blue); background: rgba(11,108,255,.08); }
+    .nav-github { border: 1px solid var(--line); background: white !important; color: var(--ink) !important; }
+    main { overflow: hidden; }
+    .shell { width: min(calc(100% - 40px), var(--max)); margin-inline: auto; }
+    .hero { min-height: 780px; display: grid; grid-template-columns: 1.03fr .97fr; align-items: center; gap: 62px; padding: 70px 0 90px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; padding: 7px 12px; border-radius: 999px; background: rgba(11,108,255,.08); color: #075bda; font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+    .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #22b36b; box-shadow: 0 0 0 5px rgba(34,179,107,.13); }
+    h1 { margin: 22px 0 22px; max-width: 710px; font-size: clamp(48px, 6.2vw, 82px); line-height: 1.02; letter-spacing: -.065em; }
+    h1 span { color: var(--blue); }
+    .lede { margin: 0; max-width: 650px; color: var(--muted); font-size: clamp(18px, 2vw, 22px); line-height: 1.65; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 30px 0 36px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 19px; border-radius: 14px; text-decoration: none; font-weight: 720; border: 1px solid var(--line); background: rgba(255,255,255,.76); }
+    .button.primary { color: white; border-color: var(--blue); background: var(--blue); box-shadow: 0 12px 28px rgba(11,108,255,.23); }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .metric { padding: 16px 14px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,.64); }
+    .metric strong { display: block; font-size: 22px; letter-spacing: -.035em; }
+    .metric span { color: var(--muted); font-size: 12px; }
+    .device-scene { position: relative; min-height: 560px; display: grid; place-items: center; }
+    .device-scene::before { content: ""; position: absolute; width: 510px; height: 510px; border-radius: 50%; background: conic-gradient(from 160deg, rgba(11,108,255,.15), rgba(0,168,214,.08), rgba(255,138,52,.18), rgba(11,108,255,.15)); filter: blur(2px); }
+    .orbit { position: absolute; width: 555px; height: 555px; border: 1px dashed rgba(11,108,255,.20); border-radius: 50%; animation: orbit 30s linear infinite; }
+    .orbit i { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--blue); top: 42px; left: 94px; box-shadow: 0 0 0 9px rgba(11,108,255,.08); }
+    @keyframes orbit { to { transform: rotate(360deg); } }
+    .device {
+      position: relative; width: min(450px, 78vw); aspect-ratio: 1; padding: 16px; border-radius: 50%;
+      background: linear-gradient(145deg, #eff4f8, #9dabb8 31%, #f8fbfd 48%, #8b98a3 72%, #eef2f5);
+      box-shadow: 0 42px 80px rgba(17,43,69,.25), inset 0 0 0 2px rgba(255,255,255,.85), inset 0 0 0 11px #202934;
+      transform: rotate(-2deg);
+    }
+    .device::after { content: ""; position: absolute; right: -20px; top: 43%; width: 18px; height: 66px; border-radius: 0 9px 9px 0; background: linear-gradient(90deg,#71808c,#d9e0e5); box-shadow: 0 12px 20px rgba(23,42,60,.2); }
+    .device img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; background: #02070b; box-shadow: inset 0 0 0 2px #000; }
+    .float-note { position: absolute; z-index: 2; max-width: 190px; padding: 13px 15px; border: 1px solid rgba(255,255,255,.9); border-radius: 17px; background: rgba(255,255,255,.72); backdrop-filter: blur(18px); box-shadow: var(--shadow); font-size: 13px; color: var(--muted); }
+    .float-note strong { display: block; color: var(--ink); font-size: 14px; }
+    .note-a { top: 70px; right: -10px; }
+    .note-b { left: -12px; bottom: 52px; }
+    section { padding: 108px 0; scroll-margin-top: 80px; }
+    .section-head { display: grid; grid-template-columns: .8fr 1.2fr; gap: 60px; align-items: end; margin-bottom: 44px; }
+    .kicker { margin: 0 0 10px; color: var(--blue); text-transform: uppercase; letter-spacing: .13em; font-weight: 800; font-size: 12px; }
+    h2 { margin: 0; font-size: clamp(36px, 4.5vw, 58px); line-height: 1.08; letter-spacing: -.052em; }
+    .section-intro { margin: 0; color: var(--muted); font-size: 18px; max-width: 640px; }
+    .proof-panel { display: grid; grid-template-columns: 1.05fr .95fr; gap: 24px; padding: 26px; border: 1px solid rgba(255,255,255,.8); border-radius: 36px; background: rgba(255,255,255,.66); backdrop-filter: blur(20px); box-shadow: var(--shadow); }
+    .proof-stage { min-height: 610px; border-radius: 27px; display: grid; place-items: center; background: radial-gradient(circle at 50% 30%, #21396b 0, #0c1527 42%, #050911 100%); overflow: hidden; position: relative; }
+    .proof-stage::before { content:""; position:absolute; inset:0; opacity:.45; background-image: radial-gradient(circle at 20% 18%, #fff 0 1px, transparent 1.8px), radial-gradient(circle at 80% 28%, #fff 0 1px, transparent 1.8px), radial-gradient(circle at 58% 82%, #74c8ff 0 1px, transparent 1.8px); background-size: 89px 103px, 131px 127px, 77px 91px; }
+    .proof-device { position: relative; width: min(440px, 83%); aspect-ratio: 1; padding: 11px; border-radius: 50%; background: linear-gradient(145deg,#eff4f7,#8897a5 35%,#fff 52%,#73818c); box-shadow: 0 35px 65px rgba(0,0,0,.42), inset 0 0 0 9px #252d35; }
+    .proof-device img { border-radius: 50%; width: 100%; height: 100%; object-fit: cover; }
+    .proof-copy { display: flex; flex-direction: column; padding: 16px 10px; }
+    .proof-copy h3 { margin: 0 0 8px; font-size: 30px; letter-spacing: -.035em; }
+    .proof-copy > p { color: var(--muted); margin: 0 0 18px; }
+    .screen-tabs { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-top: auto; }
+    .screen-tab { min-height: 68px; text-align: left; border: 1px solid var(--line); border-radius: 16px; padding: 11px 13px; color: var(--muted); background: rgba(246,249,252,.8); cursor: pointer; transition: .2s ease; }
+    .screen-tab strong { display: block; color: var(--ink); font-size: 14px; }
+    .screen-tab:hover { transform: translateY(-2px); }
+    .screen-tab.active { border-color: rgba(11,108,255,.45); background: rgba(11,108,255,.09); box-shadow: inset 3px 0 var(--blue); }
+    .privacy-note { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; margin-top: 16px; border-radius: 17px; background: #eef8f3; color: #266044; font-size: 14px; }
+    .privacy-note svg { flex: 0 0 auto; margin-top: 2px; }
+    .architecture { position: relative; padding: 42px; border: 1px solid var(--line); border-radius: 34px; background: white; box-shadow: var(--shadow); }
+    .arch-grid { display: grid; grid-template-columns: 1fr 100px 1fr 100px 1fr; align-items: stretch; }
+    .arch-col { display: flex; flex-direction: column; gap: 12px; }
+    .arch-title { color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 2px; }
+    .arch-card { flex: 1; min-height: 108px; padding: 18px; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(145deg,#fff,#f7faff); transition: .2s ease; }
+    .arch-card:hover { transform: translateY(-3px); border-color: rgba(11,108,255,.35); box-shadow: 0 15px 28px rgba(28,68,108,.09); }
+    .arch-card b { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 5px rgba(11,108,255,.09); }
+    .arch-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .arch-flow { display: grid; place-items: center; color: var(--blue); font-size: 28px; }
+    .arch-flow small { display: block; writing-mode: vertical-rl; font-size: 10px; letter-spacing: .08em; color: var(--muted); }
+    .architecture figcaption { margin-top: 22px; color: var(--muted); font-size: 14px; }
+    .layer-strip { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-top: 24px; }
+    .layer { padding: 16px; border-radius: 18px; color: white; min-height: 96px; }
+    .layer:nth-child(1) { background:#0b6cff; }
+    .layer:nth-child(2) { background:#008cb8; }
+    .layer:nth-child(3) { background:#2d8e63; }
+    .layer:nth-child(4) { background:#ef7e2e; }
+    .layer strong { display:block; margin-bottom:4px; }
+    .layer span { font-size:12px; opacity:.85; }
+    .learn-grid { display: grid; grid-template-columns: .84fr 1.16fr; gap: 24px; }
+    .hardware-visual { padding: 32px; min-height: 640px; border-radius: 32px; color: white; background: #0b1930; position: relative; overflow: hidden; box-shadow: var(--shadow); }
+    .hardware-visual::before { content:""; position:absolute; width:430px; height:430px; right:-180px; top:-140px; border-radius:50%; background:rgba(0,168,214,.19); filter:blur(12px); }
+    .hardware-visual h3 { margin:0; font-size:28px; }
+    .hardware-visual > p { color:#aec0da; margin:8px 0 28px; }
+    .chip { width: 232px; height: 232px; margin: 44px auto; border-radius: 38px; border: 2px solid #77bdff; background: linear-gradient(145deg,#1d3d67,#0a1b34); display:grid; place-items:center; text-align:center; position:relative; box-shadow: 0 0 0 18px rgba(66,154,239,.05), 0 0 55px rgba(64,165,255,.18); }
+    .chip::before, .chip::after { content:""; position:absolute; inset:24px -33px; border-block: 2px dashed rgba(130,192,255,.35); }
+    .chip::after { inset:-33px 24px; border-block:0; border-inline:2px dashed rgba(130,192,255,.35); }
+    .chip b { display:block; font-size:25px; }
+    .chip span { color:#a8bdd7; font-size:13px; }
+    .chip-label { position:absolute; min-width:135px; padding:10px 12px; border:1px solid rgba(140,198,255,.25); border-radius:14px; background:rgba(20,47,79,.88); font-size:12px; }
+    .chip-label strong { display:block; color:#79c9ff; font-size:13px; }
+    .cl-a { top:-36px; left:-90px; } .cl-b { top:-36px; right:-92px; } .cl-c { bottom:-45px; left:-90px; } .cl-d { bottom:-45px; right:-92px; }
+    .signal-row { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-top:64px; }
+    .signal { padding:12px; border-radius:14px; background:rgba(255,255,255,.07); color:#b8c9de; font-size:12px; }
+    .signal b { display:block; color:white; }
+    .lesson-list { display:flex; flex-direction:column; gap:12px; }
+    details { border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.78); overflow:hidden; }
+    summary { list-style:none; cursor:pointer; padding:21px 22px; display:flex; align-items:center; gap:15px; font-weight:760; }
+    summary::-webkit-details-marker { display:none; }
+    summary::after { content:"＋"; margin-left:auto; color:var(--blue); font-size:22px; }
+    details[open] summary::after { content:"−"; }
+    .step-no { display:grid; place-items:center; width:34px; height:34px; border-radius:12px; background:rgba(11,108,255,.09); color:var(--blue); font-size:13px; }
+    .detail-body { padding:0 22px 23px 71px; color:var(--muted); }
+    .detail-body p { margin:0 0 10px; }
+    .detail-body ul { margin:8px 0 0; padding-left:20px; }
+    .flash-board { padding: 34px; border-radius: 32px; border: 1px solid var(--line); background: white; box-shadow: var(--shadow); }
+    .flash-flow { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; counter-reset:flash; }
+    .flash-step { position:relative; padding:20px 18px; min-height:145px; border-radius:20px; background:#f5f8fc; border:1px solid var(--line); }
+    .flash-step::before { counter-increment:flash; content:counter(flash); display:grid; place-items:center; width:30px; height:30px; border-radius:50%; background:var(--blue); color:white; font-weight:800; margin-bottom:12px; }
+    .flash-step:not(:last-child)::after { content:"→"; position:absolute; right:-20px; top:54px; z-index:2; width:28px; height:28px; display:grid; place-items:center; border-radius:50%; background:white; color:var(--blue); box-shadow:0 4px 13px rgba(20,52,88,.12); }
+    .flash-step strong { display:block; }
+    .flash-step span { color:var(--muted); font-size:13px; }
+    .partition { margin-top:30px; }
+    .partition-title { display:flex; justify-content:space-between; gap:16px; margin-bottom:10px; font-size:13px; color:var(--muted); }
+    .partition-bar { display:flex; gap:3px; min-height:76px; padding:5px; border-radius:18px; background:#e8edf3; overflow:hidden; }
+    .part { min-width:7px; display:flex; flex-direction:column; justify-content:center; padding:8px; color:white; border-radius:12px; overflow:hidden; font-size:11px; }
+    .part b { white-space:nowrap; font-size:12px; }
+    .p-system { flex:.2; background:#77889b; } .p-app { flex:8; background:var(--blue); } .p-wall { flex:8; background:var(--cyan); } .p-content { flex:8; background:var(--green); } .p-free { flex:7.8; color:#68798c; background:repeating-linear-gradient(135deg,#edf1f4,#edf1f4 8px,#e2e7ec 8px,#e2e7ec 16px); }
+    .callout { margin-top:22px; padding:18px 20px; border-left:4px solid var(--orange); border-radius:0 16px 16px 0; background:#fff6ed; color:#73451f; }
+    code { padding:2px 6px; border-radius:6px; background:#eef2f6; font-family:"SFMono-Regular",Consolas,monospace; font-size:.9em; }
+    .security-grid { display:grid; grid-template-columns:1.15fr .85fr; gap:24px; }
+    .security-diagram { padding:32px; border-radius:32px; background:linear-gradient(145deg,#eff8ff,#f9fcff); border:1px solid rgba(11,108,255,.15); }
+    .handshake { display:grid; grid-template-columns:1fr 74px 1fr; align-items:center; margin:28px 0; }
+    .handshake-node { min-height:190px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; border:1px solid rgba(11,108,255,.18); border-radius:24px; background:white; box-shadow:0 14px 35px rgba(23,70,114,.08); }
+    .handshake-node svg { margin-bottom:13px; }
+    .handshake-node span { color:var(--muted); font-size:12px; }
+    .handshake-link { height:2px; background:var(--blue); position:relative; }
+    .handshake-link::before,.handshake-link::after { content:""; position:absolute; top:-4px; width:10px; height:10px; border-radius:50%; background:var(--blue); }
+    .handshake-link::before { left:0; } .handshake-link::after { right:0; }
+    .security-list { display:flex; flex-direction:column; gap:12px; }
+    .security-item { padding:20px; border:1px solid var(--line); border-radius:20px; background:white; }
+    .security-item b { display:block; margin-bottom:5px; }
+    .security-item p { color:var(--muted); margin:0; font-size:14px; }
+    .risk { border-color:rgba(255,138,52,.35); background:#fffaf5; }
+    .build-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .build-card { padding:25px; min-height:255px; border:1px solid var(--line); border-radius:24px; background:rgba(255,255,255,.82); }
+    .build-card .num { font-size:12px; color:var(--blue); font-weight:800; }
+    .build-card h3 { margin:14px 0 8px; font-size:21px; }
+    .build-card p { margin:0; color:var(--muted); font-size:14px; }
+    .build-card code { display:inline-block; margin-top:18px; }
+    .results { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    .result { padding:25px 20px; min-height:180px; border-radius:24px; color:white; }
+    .result:nth-child(1) { background:#0b6cff; } .result:nth-child(2) { background:#008fb8; } .result:nth-child(3) { background:#2b9a69; } .result:nth-child(4) { background:#ed7e31; }
+    .result strong { display:block; font-size:34px; letter-spacing:-.04em; }
+    .result span { display:block; font-weight:700; }
+    .result small { display:block; margin-top:12px; opacity:.8; }
+    .honesty { margin-top:18px; color:var(--muted); font-size:13px; }
+    .route { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-top:38px; }
+    .route div { position:relative; padding:18px 14px; border:1px solid var(--line); border-radius:18px; background:white; }
+    .route div:not(:last-child)::after { content:"→"; position:absolute; right:-14px; top:50%; transform:translateY(-50%); z-index:2; color:var(--blue); }
+    .route b { display:block; color:var(--blue); font-size:12px; }
+    .route span { font-size:13px; color:var(--muted); }
+    .cta { margin:70px auto 110px; padding:60px; border-radius:38px; color:white; background:linear-gradient(120deg,#075fe0,#0b8fd2); box-shadow:0 32px 70px rgba(11,108,255,.25); display:grid; grid-template-columns:1.15fr .85fr; gap:30px; align-items:center; }
+    .cta h2 { max-width:680px; }
+    .cta p { color:rgba(255,255,255,.8); margin:16px 0 0; }
+    .cta-actions { display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
+    .cta .button { color:var(--blue); background:white; border-color:white; }
+    .cta .button.secondary { color:white; background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.28); }
+    footer { border-top:1px solid var(--line); padding:28px 0 45px; color:var(--muted); font-size:13px; }
+    footer .shell { display:flex; justify-content:space-between; gap:24px; }
+    .reveal { opacity:0; transform:translateY(18px); transition:opacity .65s ease, transform .65s ease; }
+    .reveal.visible { opacity:1; transform:none; }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } *,*::before,*::after { animation:none !important; transition:none !important; } .reveal { opacity:1; transform:none; } }
+    @media (max-width: 940px) {
+      .nav-links a:not(.nav-github) { display:none; }
+      .hero { grid-template-columns:1fr; padding-top:70px; }
+      .hero-copy { text-align:center; } .lede { margin-inline:auto; } .hero-actions { justify-content:center; }
+      .device-scene { min-height:520px; }
+      .section-head,.proof-panel,.learn-grid,.security-grid,.cta { grid-template-columns:1fr; }
+      .arch-grid { grid-template-columns:1fr; gap:12px; }
+      .arch-flow { height:52px; transform:rotate(90deg); } .arch-flow small { display:none; }
+      .layer-strip,.results { grid-template-columns:repeat(2,1fr); }
+      .flash-flow,.build-grid { grid-template-columns:repeat(2,1fr); }
+      .flash-step::after { display:none; }
+      .cta-actions { justify-content:flex-start; }
+      .route { grid-template-columns:repeat(3,1fr); }
+      .route div::after { display:none; }
+    }
+    @media (max-width: 620px) {
+      .shell { width:min(calc(100% - 28px),var(--max)); }
+      .nav-wrap { padding-inline:10px; } nav { padding-left:14px; }
+      h1 { font-size:49px; } section { padding:78px 0; }
+      .hero { padding-bottom:55px; gap:25px; }
+      .metrics { grid-template-columns:repeat(2,1fr); }
+      .device-scene { min-height:430px; } .orbit { width:410px; height:410px; }
+      .float-note { display:none; }
+      .section-head { gap:18px; }
+      .proof-panel,.architecture,.flash-board,.security-diagram { padding:16px; border-radius:25px; }
+      .proof-stage { min-height:390px; }
+      .screen-tabs { grid-template-columns:1fr; }
+      .hardware-visual { padding:24px 15px; min-height:610px; }
+      .chip { width:185px; height:185px; }
+      .chip-label { min-width:108px; font-size:10px; padding:8px; }
+      .cl-a,.cl-c { left:-57px; } .cl-b,.cl-d { right:-57px; }
+      .signal-row { margin-top:74px; }
+      .layer-strip,.flash-flow,.build-grid,.results { grid-template-columns:1fr; }
+      .partition-bar { flex-direction:column; } .part { min-height:52px; }
+      .handshake { grid-template-columns:1fr; gap:16px; }
+      .handshake-link { width:2px; height:52px; margin:auto; }
+      .handshake-link::before,.handshake-link::after { left:-4px; } .handshake-link::after { top:auto; bottom:0; }
+      .route { grid-template-columns:1fr; }
+      .cta { padding:36px 24px; }
+      footer .shell { flex-direction:column; }
+    }
+    @media print {
+      .nav-wrap,.hero-actions,.screen-tabs,.cta-actions { display:none !important; }
+      body { background:white; } .hero { min-height:0; padding:40px 0; }
+      section { padding:42px 0; break-inside:avoid; }
+      .reveal { opacity:1; transform:none; }
+      .architecture,.proof-panel,.flash-board { box-shadow:none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">跳到正文</a>
+  <div class="nav-wrap">
+    <nav aria-label="主导航">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>Round Clock OS</a>
+      <div class="nav-links">
+        <a href="#results">实际效果</a><a href="#architecture">架构</a><a href="#principles">开发原理</a><a href="#flashing">烧录</a><a href="#security">安全</a>
+        <a class="nav-github" href="https://github.com/scott987-cmd/ESP32-Round-Clock" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </div>
+    </nav>
+  </div>
+
+  <main id="main">
+    <header class="shell hero" id="top">
+      <div class="hero-copy reveal">
+        <span class="eyebrow">真实设备 · 开源项目 · 脱敏展示</span>
+        <h1>把一块开发板，做成<span>可扩展的圆屏系统</span></h1>
+        <p class="lede">这不是一张概念图。它已经能显示时钟、滑动切换应用、听懂语音、联网生成内容，也能继续装入新的应用。下面从「看得到的成果」讲到「为什么它能工作」。</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#results">先看真实效果 ↓</a>
+          <a class="button" href="#principles">从零理解原理</a>
+        </div>
+        <div class="metrics" aria-label="项目关键指标">
+          <div class="metric"><strong>18</strong><span>个内置应用</span></div>
+          <div class="metric"><strong>466²</strong><span>圆形 AMOLED</span></div>
+          <div class="metric"><strong>32 MB</strong><span>板载 Flash</span></div>
+          <div class="metric"><strong>双因子</strong><span>设备联网鉴权</span></div>
+        </div>
+      </div>
+      <div class="device-scene reveal" aria-label="设备真实时钟界面">
+        <div class="orbit" aria-hidden="true"><i></i></div>
+        <div class="device"><img src="assets/screen-clock.png" alt="圆屏设备上的真实时钟界面，显示山景壁纸、时间和日期"></div>
+        <div class="float-note note-a"><strong>不是网页模拟</strong>画面来自设备 466×466 帧缓冲截图</div>
+        <div class="float-note note-b"><strong>默认进入时钟</strong>仍可返回桌面，继续打开其他应用</div>
+      </div>
+    </header>
+
+    <section id="results">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Actual product</p><h2>已经跑起来的实际效果</h2></div>
+          <p class="section-intro">点选右侧条目切换真实设备截图。所有图片均来自同一块圆屏开发板，而不是后期绘制的 UI 稿。</p>
+        </div>
+        <div class="proof-panel reveal">
+          <div class="proof-stage"><div class="proof-device"><img id="proofImage" src="assets/screen-launcher.png" alt="圆屏应用启动器真实截图"></div></div>
+          <div class="proof-copy">
+            <p class="kicker">Framebuffer capture</p>
+            <h3 id="proofTitle">圆形应用启动器</h3>
+            <p id="proofDescription">左右滑动切换应用，中央显示当前应用，两侧保留即将切换的预览；上滑进入全部应用。</p>
+            <div class="screen-tabs" role="list" aria-label="设备界面截图选择">
+              <button class="screen-tab active" data-src="assets/screen-launcher.png" data-alt="圆屏应用启动器真实截图" data-title="圆形应用启动器" data-description="左右滑动切换应用，中央显示当前应用，两侧保留即将切换的预览；上滑进入全部应用。"><strong>桌面</strong>单应用轮播</button>
+              <button class="screen-tab" data-src="assets/screen-overview.png" data-alt="全部应用概览真实截图" data-title="全部应用概览" data-description="缩小展示多个应用，点击即可打开。应用数量增长时可继续上下滚动，而不是把图标越挤越小。"><strong>应用库</strong>总览与滚动</button>
+              <button class="screen-tab" data-src="assets/screen-weather.png" data-alt="北京天气应用真实截图" data-title="联网天气" data-description="设备通过安全服务读取天气，圆屏中只展示当前最有用的信息，并保留触控刷新入口。"><strong>天气</strong>联网数据</button>
+              <button class="screen-tab" data-src="assets/screen-english.png" data-alt="看图英语应用真实截图" data-title="看图英语" data-description="图片、英文单词和中文含义一起出现，进入练习后自动点读，也可手动再次播放。"><strong>看图英语</strong>图像与声音</button>
+              <button class="screen-tab" data-src="assets/screen-game.png" data-alt="点点小星星游戏真实截图" data-title="儿童小游戏" data-description="直接利用圆形触摸屏完成点击互动。游戏逻辑完全本地运行，不依赖网络。"><strong>点点小星星</strong>本地触控</button>
+              <button class="screen-tab" data-src="assets/screen-pet.png" data-alt="电子宠物应用真实截图" data-title="电子宠物" data-description="点击、喂食和陪伴都会改变状态，说明系统不仅能显示数据，也能保存应用自己的进度。"><strong>电子宠物</strong>状态持久化</button>
+              <button class="screen-tab" data-src="assets/screen-story.png" data-alt="互动故事屋应用真实截图" data-title="互动故事屋" data-description="将图像、文本、音频和触摸选择组合成一个应用，是后续扩展儿童内容的基础模板。"><strong>故事屋</strong>多媒体交互</button>
+              <button class="screen-tab" data-src="assets/screen-clock.png" data-alt="动态壁纸时钟真实截图" data-title="动态壁纸时钟" data-description="开机默认进入时钟；壁纸可更新，动画与时间叠加渲染，实体键或手势可以返回桌面。"><strong>时钟</strong>默认入口</button>
+            </div>
+          </div>
+        </div>
+        <div class="privacy-note reveal">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 4.5 6v5.4c0 4.7 3.1 8.1 7.5 9.6 4.4-1.5 7.5-4.9 7.5-9.6V6L12 3Z" stroke="currentColor" stroke-width="1.8"/><path d="m8.8 12 2.1 2.1 4.5-4.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span><strong>隐私说明：</strong>本页未展示真实头像、Wi‑Fi 名称、服务器地址、访问凭据、额度数据或 Agent 任务名称。演示画面只保留产品交互本身。</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">System map</p><h2>整体架构：三台“机器”协作</h2></div>
+          <p class="section-intro">圆屏负责即时交互，服务端负责重计算和联网数据，Mac 助手负责可选的内容管理。即使助手关闭，设备仍能独立连接服务端。</p>
+        </div>
+        <figure class="architecture reveal">
+          <div class="arch-grid">
+            <div class="arch-col">
+              <div class="arch-title">圆屏设备</div>
+              <div class="arch-card"><b><i class="dot"></i>显示与触摸</b><p>LVGL 绘制界面；触摸驱动把坐标变成点击、上下滑和左右滑。</p></div>
+              <div class="arch-card"><b><i class="dot"></i>本地能力</b><p>时钟、动画、游戏、设置、录音、存储和 BLE 都在 ESP32-S3 上运行。</p></div>
+            </div>
+            <div class="arch-flow" aria-hidden="true">⇄<small>HTTPS · 8080 · mTLS</small></div>
+            <div class="arch-col">
+              <div class="arch-title">公网入口与服务端</div>
+              <div class="arch-card"><b><i class="dot" style="background:#00a8d6"></i>nginx 安全门</b><p>先验证设备证书、Token、请求频率和数据大小，再允许访问内部服务。</p></div>
+              <div class="arch-card"><b><i class="dot" style="background:#00a8d6"></i>Python 业务服务</b><p>只监听本机回环地址，处理天气、作品、语音、生成任务与状态查询。</p></div>
+            </div>
+            <div class="arch-flow" aria-hidden="true">⇄<small>受控的服务端调用</small></div>
+            <div class="arch-col">
+              <div class="arch-title">外部能力</div>
+              <div class="arch-card"><b><i class="dot" style="background:#2aab6d"></i>AI 与语音</b><p>MiniMax 生成图像、音乐和摘要；SenseVoice 优先识别语音，Whisper 后备。</p></div>
+              <div class="arch-card"><b><i class="dot" style="background:#ff8a34"></i>可选 Mac 助手</b><p>上传内容、同步统计和管理素材；不是设备启动或联网的必要条件。</p></div>
+            </div>
+          </div>
+          <div class="layer-strip" aria-label="系统四层结构">
+            <div class="layer"><strong>交互层</strong><span>屏幕、触摸、按键、麦克风</span></div>
+            <div class="layer"><strong>应用层</strong><span>桌面、18 个应用、后台任务</span></div>
+            <div class="layer"><strong>连接层</strong><span>Wi‑Fi、HTTPS、BLE HID</span></div>
+            <div class="layer"><strong>服务层</strong><span>天气、语音、生成、同步</span></div>
+          </div>
+          <figcaption>关键原则：设备端永远不保存模型服务商密钥；高成本或需要互联网的工作留在服务端，本地交互则尽量留在设备上。</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="principles">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">How it works</p><h2>零基础理解开发原理</h2></div>
+          <p class="section-intro">把它想成一台极小的电脑：芯片是大脑，Flash 是硬盘，PSRAM 是工作台，显示与触摸是它和人的交流方式。</p>
+        </div>
+        <div class="learn-grid">
+          <div class="hardware-visual reveal">
+            <h3>硬件如何连成一台小电脑</h3><p>每个外设通过总线与 ESP32-S3 通信。</p>
+            <div class="chip">
+              <div><b>ESP32‑S3</b><span>双核处理器 · Wi‑Fi · BLE</span></div>
+              <div class="chip-label cl-a"><strong>466×466 AMOLED</strong>SPI / QSPI 像素传输</div>
+              <div class="chip-label cl-b"><strong>CST9217 触摸</strong>I²C 读取手指坐标</div>
+              <div class="chip-label cl-c"><strong>ES7210 麦克风</strong>I²S 接收数字音频</div>
+              <div class="chip-label cl-d"><strong>Flash + PSRAM</strong>长期存储与运行内存</div>
+            </div>
+            <div class="signal-row">
+              <div class="signal"><b>SPI / QSPI</b>高速送像素</div><div class="signal"><b>I²C</b>读取控制信息</div><div class="signal"><b>I²S</b>传输声音采样</div>
+            </div>
+          </div>
+          <div class="lesson-list reveal">
+            <details open><summary><span class="step-no">01</span>程序为什么能显示一个界面？</summary><div class="detail-body"><p>应用先告诉 LVGL：这里放文字、按钮、图片。LVGL 计算哪些像素发生了变化，再让显示驱动把这小块像素送进屏幕。</p><p>这样不必每次都重画整张 466×466 画面，速度更快，也更省内存。</p></div></details>
+            <details><summary><span class="step-no">02</span>手指滑动是怎么被识别的？</summary><div class="detail-body"><p>触摸芯片持续报告手指坐标。系统记录“按下点”和“松开点”：横向距离够大就是左右滑，纵向距离够大就是上下滑，移动很小则是点击。</p><p>手势先交给桌面或当前应用；系统级返回按键始终保留，避免困在某个应用里。</p></div></details>
+            <details><summary><span class="step-no">03</span>为什么生成音乐时还能切换应用？</summary><div class="detail-body"><p>耗时工作被拆成“提交任务”和“查询结果”。设备发出请求后立即得到任务编号，把状态写入本地；之后由后台定期查询。</p><p>界面不需要一直停在等待页。再次打开应用时，它从持久化状态恢复进度或结果。</p></div></details>
+            <details><summary><span class="step-no">04</span>动态壁纸为什么不会吃光内存？</summary><div class="detail-body"><p>关键不是把整段动画全部放入 RAM，而是按帧或按小块解码、复用缓冲区，并只刷新变化区域。需要 DMA 的显示缓冲放在芯片内部可访问的内存；大素材留在 Flash 或 PSRAM。</p><p>这正是嵌入式开发和普通网页开发最不同的地方：每一块内存都要知道放在哪里、由谁使用。</p></div></details>
+            <details><summary><span class="step-no">05</span>Wi‑Fi、蓝牙和互联网分别做什么？</summary><div class="detail-body"><ul><li><strong>Wi‑Fi：</strong>让设备连接路由器，再访问服务端。</li><li><strong>BLE：</strong>近距离连接电脑，可作为安全键盘等独立功能。</li><li><strong>HTTPS：</strong>在互联网中加密数据，并验证通信双方身份。</li></ul></div></details>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="flashing">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Flashing explained</p><h2>烧录到底发生了什么？</h2></div>
+          <p class="section-intro">“烧录”不是把源代码复制进开发板，而是先编译成芯片能执行的二进制，再通过 USB 串口把它写入 Flash 的指定位置。</p>
+        </div>
+        <div class="flash-board reveal">
+          <div class="flash-flow">
+            <div class="flash-step"><strong>编译</strong><span>ESP‑IDF 把 C/C++、资源和配置转成固件镜像。</span></div>
+            <div class="flash-step"><strong>进入下载模式</strong><span>芯片 ROM 内置的小程序等待电脑发送数据。</span></div>
+            <div class="flash-step"><strong>USB 传输</strong><span>esptool 按分区地址写入 Bootloader、分区表和应用。</span></div>
+            <div class="flash-step"><strong>重启执行</strong><span>Bootloader 找到应用分区，校验后跳转到系统入口。</span></div>
+          </div>
+          <div class="partition">
+            <div class="partition-title"><strong>32 MB Flash 逻辑地图</strong><span>示意比例；小型系统分区已适当放大</span></div>
+            <div class="partition-bar" aria-label="Flash 分区布局">
+              <div class="part p-system"><b>系统</b><span>NVS / PHY / 引导</span></div>
+              <div class="part p-app"><b>8 MB 应用</b><span>系统与 18 个 App</span></div>
+              <div class="part p-wall"><b>8 MB 壁纸</b><span>用户图像与状态</span></div>
+              <div class="part p-content"><b>8 MB 内容包</b><span>离线图片与声音</span></div>
+              <div class="part p-free"><b>其余空间</b><span>芯片地址空间余量</span></div>
+            </div>
+          </div>
+          <div class="callout"><strong>什么时候需要按 BOOT？</strong> 大多数板子会由 USB 自动控制下载模式。只有自动切换失败时，才需要按住 BOOT 后插入 USB，让芯片在上电瞬间进入 ROM 下载器。普通烧录不会修改 Mac 的 Wi‑Fi，也不要求抹掉整颗 Flash。</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="security">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Security model</p><h2>公网服务如何只让设备访问</h2></div>
+          <p class="section-intro">“绝对安全”并不存在，但可以把攻击面压到很小：服务端同时检查设备证书与高强度 Token，任一项不对都拒绝。</p>
+        </div>
+        <div class="security-grid">
+          <div class="security-diagram reveal">
+            <h3>双重设备身份验证</h3>
+            <div class="handshake">
+              <div class="handshake-node"><svg width="46" height="46" viewBox="0 0 48 48" fill="none" aria-hidden="true"><rect x="8" y="7" width="32" height="34" rx="8" stroke="#0b6cff" stroke-width="2"/><circle cx="24" cy="19" r="6" stroke="#0b6cff" stroke-width="2"/><path d="M15 35c2.5-5 5.5-7 9-7s6.5 2 9 7" stroke="#0b6cff" stroke-width="2" stroke-linecap="round"/></svg><b>圆屏设备</b><span>客户端证书 + 随机 Token</span></div>
+              <div class="handshake-link" aria-label="加密连接"></div>
+              <div class="handshake-node"><svg width="46" height="46" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 5 9 11v11c0 9.4 6.2 16.2 15 19 8.8-2.8 15-9.6 15-19V11L24 5Z" stroke="#0b6cff" stroke-width="2"/><path d="m17 23 4.5 4.5L31.5 17" stroke="#0b6cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>nginx 安全入口</b><span>mTLS 校验 + Bearer 校验</span></div>
+            </div>
+            <p>通过后才转发到只监听 <code>127.0.0.1</code> 的业务服务；模型密钥从不下发给设备。</p>
+          </div>
+          <div class="security-list reveal">
+            <div class="security-item"><b>最小暴露面</b><p>公网只有受 TLS 保护的 8080 入口；Python 服务不直接对外监听。</p></div>
+            <div class="security-item"><b>请求边界</b><p>限制请求体、连接数、频率与超时，降低扫描、爆破和资源耗尽风险。</p></div>
+            <div class="security-item"><b>敏感信息隔离</b><p>真实证书、Token、Wi‑Fi 密码和模型密钥被 Git 忽略，本展示页也不包含这些信息。</p></div>
+            <div class="security-item risk"><b>仍需知道的物理风险</b><p>开发模式尚未启用 Secure Boot 与 Flash Encryption。若设备丢失，专业人员可能读取 Flash；产品化前应执行不可逆硬件加固。</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="extend">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Build your own</p><h2>怎样增加第 19 个应用</h2></div>
+          <p class="section-intro">把新应用看成一个有明确生命周期的小模块：创建界面、响应事件、保存状态、退出时释放资源。</p>
+        </div>
+        <div class="build-grid reveal">
+          <div class="build-card"><span class="num">STEP 01</span><h3>定义边界</h3><p>先决定它完全本地运行，还是需要服务端。联网只传最少数据，不把密钥写进固件。</p><code>my_app.c / .h</code></div>
+          <div class="build-card"><span class="num">STEP 02</span><h3>接入启动器</h3><p>注册中文名称、图标颜色和打开回调。桌面轮播与应用库会按同一清单展示。</p><code>app_registry</code></div>
+          <div class="build-card"><span class="num">STEP 03</span><h3>搭建 LVGL 界面</h3><p>使用圆形安全区，保持文字可读；长列表允许滚动，绝不为“塞下”而缩小所有内容。</p><code>lv_obj / event</code></div>
+          <div class="build-card"><span class="num">STEP 04</span><h3>处理后台工作</h3><p>网络、语音和生成任务不能阻塞 UI。保存任务编号，让用户离开后仍能恢复进度。</p><code>FreeRTOS task</code></div>
+          <div class="build-card"><span class="num">STEP 05</span><h3>控制内存</h3><p>DMA 缓冲放内部 RAM，大素材放 PSRAM / Flash；页面退出时删除定时器和对象。</p><code>heap_caps</code></div>
+          <div class="build-card"><span class="num">STEP 06</span><h3>验证再发布</h3><p>编译、单元测试、截图巡检、真机手势测试；最后关闭开发专用 USB 测试桥。</p><code>idf.py build</code></div>
+        </div>
+        <div class="route reveal" aria-label="推荐学习路线">
+          <div><b>第 1 站</b><span>认识 GPIO 与总线</span></div><div><b>第 2 站</b><span>跑通 ESP‑IDF 示例</span></div><div><b>第 3 站</b><span>理解 LVGL 对象树</span></div><div><b>第 4 站</b><span>学习任务与内存</span></div><div><b>第 5 站</b><span>再接入 HTTPS 服务</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="verification">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Verified outcome</p><h2>交付不是“能编译”就结束</h2></div>
+          <p class="section-intro">项目同时检查固件、服务端、Mac 助手、离线内容和公开仓库，实际截图再验证一遍圆屏排版与交互状态。</p>
+        </div>
+        <div class="results reveal">
+          <div class="result"><strong>18</strong><span>应用统一接入桌面</span><small>时钟、天气、语音、AI、儿童内容与系统工具</small></div>
+          <div class="result"><strong>≈37%</strong><span>应用分区剩余空间</span><small>仍可扩展，但新增资源必须持续测量</small></div>
+          <div class="result"><strong>2.9</strong><span>systemd 安全暴露评分</span><small>当前检查结果为 OK，不等于永远无漏洞</small></div>
+          <div class="result"><strong>CI ✓</strong><span>公开流水线通过</span><small>自动检查服务端测试、内容包与公开树泄密</small></div>
+        </div>
+        <p class="honesty reveal">数据对应本次收尾版本。安全结论是“在已知威胁模型和已执行检查下通过”，不是对未来漏洞的绝对保证。</p>
+      </div>
+    </section>
+
+    <div class="shell cta reveal">
+      <div><p class="kicker" style="color:#b9e5ff">OPEN SOURCE</p><h2>从成果看懂原理，再从原理开始二次开发。</h2><p>完整固件、服务端、macOS 助手、测试与部署文档均已整理在公开仓库。</p></div>
+      <div class="cta-actions"><a class="button" href="https://github.com/scott987-cmd/ESP32-Round-Clock" target="_blank" rel="noreferrer">打开 GitHub ↗</a><a class="button secondary" href="https://github.com/scott987-cmd/ESP32-Round-Clock/blob/main/docs/DEVELOPMENT.md" target="_blank" rel="noreferrer">二次开发指南</a></div>
+    </div>
+  </main>
+
+  <footer><div class="shell"><span>Round Clock OS · ESP32‑S3 圆形触摸屏开源系统</span><span>此页面使用脱敏演示数据，不包含私人信息与凭据。</span></div></footer>
+
+  <script>
+    const tabs = [...document.querySelectorAll('.screen-tab')];
+    const proofImage = document.getElementById('proofImage');
+    const proofTitle = document.getElementById('proofTitle');
+    const proofDescription = document.getElementById('proofDescription');
+    tabs.forEach(tab => tab.addEventListener('click', () => {
+      tabs.forEach(item => item.classList.remove('active'));
+      tab.classList.add('active');
+      proofImage.style.opacity = '0';
+      window.setTimeout(() => {
+        proofImage.src = tab.dataset.src;
+        proofImage.alt = tab.dataset.alt;
+        proofTitle.textContent = tab.dataset.title;
+        proofDescription.textContent = tab.dataset.description;
+        proofImage.style.opacity = '1';
+      }, 130);
+    }));
+    proofImage.style.transition = 'opacity .18s ease';
+
+    const sections = [...document.querySelectorAll('section[id]')];
+    const navItems = [...document.querySelectorAll('.nav-links a[href^="#"]')];
+    const navObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        navItems.forEach(item => item.classList.toggle('active', item.getAttribute('href') === `#${entry.target.id}`));
+      });
+    }, { rootMargin: '-35% 0px -55% 0px' });
+    sections.forEach(section => navObserver.observe(section));
+
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) { entry.target.classList.add('visible'); revealObserver.unobserve(entry.target); }
+      });
+    }, { threshold: .08 });
+    document.querySelectorAll('.reveal').forEach(item => revealObserver.observe(item));
+  </script>
+</body>
+</html>

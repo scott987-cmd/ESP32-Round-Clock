@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate a fresh ESP32 wallpaper every day
+
+[Timer]
+OnCalendar=*-*-* 04:05:00 Asia/Shanghai
+RandomizedDelaySec=10m
+Persistent=true
+Unit=esp32-wallpaper-generate.service
+
+[Install]
+WantedBy=timers.target

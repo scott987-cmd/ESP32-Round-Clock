@@ -1,0 +1,10 @@
+menu "Round Clock options"
+
+config ROUND_CLOCK_USB_TEST_BRIDGE
+    bool "Enable USB test and screenshot bridge"
+    default n
+    help
+        Development-only serial control surface used by UI automation. Keep this
+        disabled in release firmware. USB flashing remains available when disabled.
+
+endmenu

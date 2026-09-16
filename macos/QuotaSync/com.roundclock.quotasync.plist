@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.roundclock.quotasync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>__ROUND_CLOCK_CONFIG_DIR__/quota_sync.py</string>
+        <string>--cert</string>
+        <string>__ROUND_CLOCK_CONFIG_DIR__/device-client.pem</string>
+        <string>--key</string>
+        <string>__ROUND_CLOCK_CONFIG_DIR__/device-client.key</string>
+        <string>--ca</string>
+        <string>__ROUND_CLOCK_CONFIG_DIR__/device-ca.pem</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/com.roundclock.quotasync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.roundclock.quotasync.err</string>
+</dict>
+</plist>

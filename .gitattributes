@@ -1,0 +1,6 @@
+*.aiff binary
+*.bin binary
+*.pcm binary
+*.png binary
+*.rgb565 binary
+*.woff2 binary

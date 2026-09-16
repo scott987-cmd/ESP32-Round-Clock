@@ -1,0 +1,19 @@
+[Unit]
+Description=Generate today's ESP32 round clock wallpaper with MiniMax
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=espclock
+Group=espclock
+EnvironmentFile=-/etc/esp32-wallpaper.env
+Environment=WALLPAPER_STATE_DIR=/var/lib/esp32-wallpaper
+Environment=WALLPAPER_DEFAULT_IMAGE=/opt/esp32-wallpaper/default.png
+ExecStart=/usr/bin/python3 /opt/esp32-wallpaper/wallpaper_service.py generate
+StateDirectory=esp32-wallpaper
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/esp32-wallpaper

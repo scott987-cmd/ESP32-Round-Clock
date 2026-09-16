@@ -1,0 +1,17 @@
+build/
+.venv/
+managed_components/
+artifacts/
+backups/
+sdkconfig
+sdkconfig.old
+main/clock_secrets.h
+main/certs/
+server/.env
+*.pyc
+__pycache__/
+*.log
+.DS_Store
+*.app/
+macos/**/.build/
+macos/RoundTextBridge/Runtime/
