@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Round Clock OS：ESP32-S3 圆形触摸屏系统的脱敏成果展示、整体架构与零基础开发教程。">
+  <meta name="description" content="Round Clock OS：ESP32-S3 圆形触摸屏系统的脱敏成果展示、整体架构、交互式技术原理实验室与二次开发教程。">
   <meta name="color-scheme" content="light">
-  <title>Round Clock OS · 架构、成果与开发原理</title>
+  <title>Round Clock OS · 交互式架构与开发原理教程</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%230b6cff'/%3E%3Ccircle cx='32' cy='32' r='21' fill='white'/%3E%3Cpath d='M32 18v15l10 6' fill='none' stroke='%230b6cff' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
   <style>
     :root {
@@ -154,6 +154,59 @@
     .detail-body { padding:0 22px 23px 71px; color:var(--muted); }
     .detail-body p { margin:0 0 10px; }
     .detail-body ul { margin:8px 0 0; padding-left:20px; }
+    .lab { border-radius: 38px; padding: 34px; border: 1px solid rgba(255,255,255,.85); background: rgba(255,255,255,.72); box-shadow: var(--shadow); backdrop-filter: blur(22px); }
+    .lab-tabs { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+    .lab-tab { border: 1px solid var(--line); border-radius: 999px; padding: 10px 15px; background: white; color: var(--muted); cursor: pointer; font-weight: 720; }
+    .lab-tab.active { color: white; border-color: var(--blue); background: var(--blue); box-shadow: 0 10px 20px rgba(11,108,255,.18); }
+    .lab-panel { display: none; min-height: 520px; }
+    .lab-panel.active { display: block; }
+    .concept-stage { display: grid; grid-template-columns: .9fr 1.1fr; gap: 24px; align-items: stretch; }
+    .concept-wheel { min-height: 480px; border-radius: 30px; background: radial-gradient(circle at 50% 48%, #ffffff 0 78px, #dbeeff 79px 80px, transparent 81px), conic-gradient(from 0deg, #0b6cff, #00a8d6, #2aab6d, #ff8a34, #0b6cff); position: relative; display: grid; place-items: center; color: white; overflow: hidden; }
+    .concept-wheel::after { content: "ROUND\\A CLOCK\\A OS"; white-space: pre; text-align: center; color: var(--ink); font-weight: 850; letter-spacing: .03em; line-height: 1.25; }
+    .concept-dot { position: absolute; width: 132px; min-height: 82px; display: grid; place-items: center; padding: 10px; border: 1px solid rgba(255,255,255,.66); border-radius: 20px; background: rgba(255,255,255,.18); backdrop-filter: blur(14px); text-align: center; font-size: 13px; font-weight: 760; cursor: pointer; }
+    .concept-dot.active { background: white; color: var(--blue); box-shadow: 0 14px 28px rgba(0,0,0,.14); }
+    .concept-dot:nth-child(1) { top: 30px; left: calc(50% - 66px); }
+    .concept-dot:nth-child(2) { right: 26px; top: 145px; }
+    .concept-dot:nth-child(3) { right: 70px; bottom: 42px; }
+    .concept-dot:nth-child(4) { left: 70px; bottom: 42px; }
+    .concept-dot:nth-child(5) { left: 26px; top: 145px; }
+    .concept-copy { padding: 30px; border: 1px solid var(--line); border-radius: 30px; background: white; }
+    .concept-copy h3 { margin: 0 0 12px; font-size: 30px; letter-spacing: -.035em; }
+    .concept-copy p { margin: 0 0 16px; color: var(--muted); }
+    .concept-list { display: grid; gap: 10px; margin-top: 24px; }
+    .concept-list div { padding: 14px 16px; border-radius: 16px; background: #f3f7fb; color: var(--muted); }
+    .flow-sim { display: grid; grid-template-columns: 1fr 80px 1fr 80px 1fr; gap: 12px; align-items: center; }
+    .flow-node { min-height: 260px; padding: 22px; border: 1px solid var(--line); border-radius: 28px; background: white; position: relative; overflow: hidden; }
+    .flow-node::before { content: ""; position: absolute; inset: 0; opacity: .08; background: radial-gradient(circle at 80% 10%, currentColor, transparent 220px); }
+    .flow-node h3 { margin: 0 0 8px; font-size: 24px; }
+    .flow-node p { color: var(--muted); margin: 0; font-size: 14px; }
+    .flow-node ul { padding-left: 19px; color: var(--muted); font-size: 14px; }
+    .flow-arrow { height: 4px; border-radius: 999px; background: #cfe0f4; position: relative; overflow: hidden; }
+    .flow-arrow::after { content: ""; position: absolute; inset: 0; width: 38%; border-radius: 999px; background: var(--blue); animation: packet 1.8s ease-in-out infinite; }
+    @keyframes packet { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
+    .packet-controls { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 10px; }
+    .packet-btn { border: 1px solid var(--line); background: white; color: var(--muted); padding: 11px 14px; border-radius: 14px; cursor: pointer; font-weight: 720; }
+    .packet-btn.active { color: white; background: var(--green); border-color: var(--green); }
+    .memory-game { display: grid; grid-template-columns: .95fr 1.05fr; gap: 24px; align-items: stretch; }
+    .memory-bank { padding: 24px; border-radius: 28px; border: 1px solid var(--line); background: white; }
+    .memory-bank h3 { margin: 0 0 16px; }
+    .drop-zone { min-height: 94px; margin-top: 12px; padding: 12px; border: 1px dashed rgba(11,108,255,.35); border-radius: 18px; background: #f7fbff; display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
+    .drop-zone strong { width: 100%; color: var(--blue); }
+    .memory-pieces { display: grid; gap: 10px; }
+    .mem-piece { border: 1px solid var(--line); border-radius: 16px; padding: 13px 14px; background: #fff; cursor: grab; box-shadow: 0 8px 18px rgba(30,68,104,.07); }
+    .mem-piece small { display: block; color: var(--muted); margin-top: 2px; }
+    .mem-piece.placed { cursor: default; background: #edf8f3; border-color: rgba(42,171,109,.35); }
+    .memory-result { margin-top: 14px; min-height: 32px; color: var(--muted); }
+    .quiz { display: grid; grid-template-columns: .85fr 1.15fr; gap: 24px; }
+    .quiz-card { padding: 26px; border-radius: 28px; border: 1px solid var(--line); background: white; }
+    .quiz-card h3 { margin: 0 0 10px; font-size: 28px; }
+    .quiz-card p { margin: 0; color: var(--muted); }
+    .quiz-options { display: grid; gap: 12px; }
+    .quiz-option { min-height: 66px; text-align: left; padding: 14px 16px; border: 1px solid var(--line); border-radius: 17px; background: white; cursor: pointer; }
+    .quiz-option.correct { border-color: rgba(42,171,109,.55); background: #eef8f3; color: #1b6843; }
+    .quiz-option.wrong { border-color: rgba(255,138,52,.55); background: #fff4e9; color: #794516; }
+    .quiz-feedback { margin-top: 18px; min-height: 46px; color: var(--muted); }
+    .quiz-next { margin-top: 12px; border: 0; border-radius: 14px; padding: 12px 16px; background: var(--blue); color: white; cursor: pointer; font-weight: 760; }
     .flash-board { padding: 34px; border-radius: 32px; border: 1px solid var(--line); background: white; box-shadow: var(--shadow); }
     .flash-flow { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; counter-reset:flash; }
     .flash-step { position:relative; padding:20px 18px; min-height:145px; border-radius:20px; background:#f5f8fc; border:1px solid var(--line); }
@@ -239,6 +292,16 @@
       .proof-panel,.architecture,.flash-board,.security-diagram { padding:16px; border-radius:25px; }
       .proof-stage { min-height:390px; }
       .screen-tabs { grid-template-columns:1fr; }
+      .lab { padding:18px; border-radius:26px; }
+      .concept-stage,.memory-game,.quiz,.flow-sim { grid-template-columns:1fr; }
+      .lab-panel { min-height:auto; }
+      .concept-wheel { min-height:380px; }
+      .concept-dot { width:108px; min-height:70px; font-size:11px; }
+      .concept-dot:nth-child(2) { right:12px; } .concept-dot:nth-child(5) { left:12px; }
+      .concept-dot:nth-child(3) { right:36px; } .concept-dot:nth-child(4) { left:36px; }
+      .flow-arrow { width:4px; height:46px; margin:auto; }
+      .flow-arrow::after { width:100%; height:38%; animation: packetDown 1.8s ease-in-out infinite; }
+      @keyframes packetDown { from { transform: translateY(-120%); } to { transform: translateY(290%); } }
       .hardware-visual { padding:24px 15px; min-height:610px; }
       .chip { width:185px; height:185px; }
       .chip-label { min-width:108px; font-size:10px; padding:8px; }
@@ -268,7 +331,7 @@
     <nav aria-label="主导航">
       <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>Round Clock OS</a>
       <div class="nav-links">
-        <a href="#results">实际效果</a><a href="#architecture">架构</a><a href="#principles">开发原理</a><a href="#flashing">烧录</a><a href="#security">安全</a>
+        <a href="#results">实际效果</a><a href="#architecture">架构</a><a href="#principles">开发原理</a><a href="#lab">原理实验室</a><a href="#flashing">烧录</a><a href="#security">安全</a>
         <a class="nav-github" href="https://github.com/scott987-cmd/ESP32-Round-Clock" target="_blank" rel="noreferrer">GitHub ↗</a>
       </div>
     </nav>
@@ -398,6 +461,97 @@
       </div>
     </section>
 
+    <section id="lab">
+      <div class="shell">
+        <div class="section-head reveal">
+          <div><p class="kicker">Learning lab</p><h2>把技术点拆成可玩的实验</h2></div>
+          <p class="section-intro">真正掌握类似项目，需要知道“信号怎么流、内存怎么放、服务怎么保护、烧录为什么会失败”。下面这些小实验把抽象概念变成可点击、可拖拽、可验证的学习过程。</p>
+        </div>
+        <div class="lab reveal">
+          <div class="lab-tabs" role="tablist" aria-label="技术原理实验室">
+            <button class="lab-tab active" role="tab" aria-selected="true" data-lab="concept">五层心智模型</button>
+            <button class="lab-tab" role="tab" aria-selected="false" data-lab="flow">一次语音请求</button>
+            <button class="lab-tab" role="tab" aria-selected="false" data-lab="memory">DMA 内存小游戏</button>
+            <button class="lab-tab" role="tab" aria-selected="false" data-lab="quiz">开发者小测</button>
+          </div>
+
+          <div class="lab-panel active" id="lab-concept" role="tabpanel">
+            <div class="concept-stage">
+              <div class="concept-wheel" aria-label="圆屏系统五层模型">
+                <button class="concept-dot active" data-concept="hardware">硬件层</button>
+                <button class="concept-dot" data-concept="driver">驱动层</button>
+                <button class="concept-dot" data-concept="ui">界面层</button>
+                <button class="concept-dot" data-concept="service">服务层</button>
+                <button class="concept-dot" data-concept="delivery">交付层</button>
+              </div>
+              <div class="concept-copy">
+                <p class="kicker">Mental model</p>
+                <h3 id="conceptTitle">硬件层：先看板子能做什么</h3>
+                <p id="conceptText">ESP32-S3 是中心，屏幕、触摸、麦克风、Flash、PSRAM 都围着它工作。做任何应用前，先确认数据从哪个外设来、走哪条总线、需要多少内存。</p>
+                <div class="concept-list" id="conceptList">
+                  <div>屏幕像素走高速显示总线，吞吐压力最大。</div>
+                  <div>触摸是低速控制信息，重点是事件判断。</div>
+                  <div>音频是持续流，必须避免 UI 阻塞。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lab-panel" id="lab-flow" role="tabpanel">
+            <div class="flow-sim" aria-label="一次语音生成请求的数据流">
+              <div class="flow-node" style="color:#0b6cff"><h3>圆屏设备</h3><p id="flowDevice">录音、显示声波，发送短音频与任务意图。</p><ul><li>板载麦克风采样</li><li>本地保存任务编号</li><li>界面可立即返回桌面</li></ul></div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" style="color:#00a8d6"><h3>安全入口</h3><p id="flowGateway">nginx 先检查客户端证书、Token、大小、频率和超时。</p><ul><li>不通过就拒绝</li><li>通过后才转发</li><li>业务服务只在本机监听</li></ul></div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" style="color:#2aab6d"><h3>AI 服务</h3><p id="flowService">服务端调用语音识别或生成模型，把结果压缩成圆屏能显示的内容。</p><ul><li>密钥留在服务端</li><li>长任务异步查询</li><li>结果写入作品库</li></ul></div>
+            </div>
+            <div class="packet-controls" aria-label="切换请求类型">
+              <button class="packet-btn active" data-flow="voice">语音输入</button>
+              <button class="packet-btn" data-flow="wallpaper">动态壁纸</button>
+              <button class="packet-btn" data-flow="quota">Agent 用量</button>
+              <button class="packet-btn" data-flow="weather">天气</button>
+            </div>
+          </div>
+
+          <div class="lab-panel" id="lab-memory" role="tabpanel">
+            <div class="memory-game">
+              <div class="memory-bank">
+                <h3>把数据放到合适的内存里</h3>
+                <p class="section-intro">拖动卡片或直接点击卡片。规则很简单：显示 DMA 缓冲要放内部 RAM；大图片和音频更适合 Flash / PSRAM；用户配置放 NVS / SPIFFS。</p>
+                <div class="memory-pieces" id="memoryPieces">
+                  <button class="mem-piece" data-target="internal">显示 DMA 缓冲<small>屏幕驱动直接读取，必须可靠高速</small></button>
+                  <button class="mem-piece" data-target="psram">动态壁纸帧缓存<small>体积较大，可复用和分块</small></button>
+                  <button class="mem-piece" data-target="flash">英语图片与音频<small>长期存在，开机后按需读取</small></button>
+                  <button class="mem-piece" data-target="nvs">设备 Token 与设置<small>小数据，需要掉电不丢</small></button>
+                </div>
+                <div class="memory-result" id="memoryResult">完成 4 张卡片后会看到解释。</div>
+                <button class="packet-btn" id="memoryReset" type="button">重新摆放</button>
+              </div>
+              <div class="memory-bank">
+                <div class="drop-zone" data-zone="internal"><strong>内部 RAM / DMA</strong></div>
+                <div class="drop-zone" data-zone="psram"><strong>PSRAM 工作区</strong></div>
+                <div class="drop-zone" data-zone="flash"><strong>Flash 内容包</strong></div>
+                <div class="drop-zone" data-zone="nvs"><strong>NVS / SPIFFS 状态</strong></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="lab-panel" id="lab-quiz" role="tabpanel">
+            <div class="quiz">
+              <div class="quiz-card">
+                <p class="kicker">Mini quiz</p>
+                <h3 id="quizQuestion">为什么耗时的 AI 生成不能直接卡在 UI 线程里等？</h3>
+                <p id="quizProgress">第 1 / 4 题</p>
+                <div class="quiz-feedback" id="quizFeedback">选择一个答案，页面会解释为什么。</div>
+                <button class="quiz-next" id="quizNext" type="button">下一题</button>
+              </div>
+              <div class="quiz-options" id="quizOptions"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="flashing">
       <div class="shell">
         <div class="section-head reveal">
@@ -514,6 +668,177 @@
       }, 130);
     }));
     proofImage.style.transition = 'opacity .18s ease';
+
+    const labTabs = [...document.querySelectorAll('.lab-tab')];
+    const labPanels = [...document.querySelectorAll('.lab-panel')];
+    labTabs.forEach(tab => tab.addEventListener('click', () => {
+      labTabs.forEach(item => {
+        const active = item === tab;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-selected', String(active));
+      });
+      labPanels.forEach(panel => panel.classList.toggle('active', panel.id === `lab-${tab.dataset.lab}`));
+    }));
+
+    const concepts = {
+      hardware: {
+        title: '硬件层：先看板子能做什么',
+        text: 'ESP32-S3 是中心，屏幕、触摸、麦克风、Flash、PSRAM 都围着它工作。做任何应用前，先确认数据从哪个外设来、走哪条总线、需要多少内存。',
+        points: ['屏幕像素走高速显示总线，吞吐压力最大。', '触摸是低速控制信息，重点是事件判断。', '音频是持续流，必须避免 UI 阻塞。']
+      },
+      driver: {
+        title: '驱动层：把电信号翻译成系统事件',
+        text: '驱动负责和外设说话：读取触摸坐标、推送显示像素、采集音频、访问存储。它是应用和硬件之间的翻译官。',
+        points: ['显示驱动关注刷新区域和 DMA 缓冲。', '触摸驱动把坐标交给 LVGL 输入设备。', '音频驱动用环形缓冲处理连续采样。']
+      },
+      ui: {
+        title: '界面层：圆屏不是方屏缩小版',
+        text: '圆形屏幕必须考虑安全区、边缘裁切、手指遮挡和返回路径。应用图标轮播、全应用概览、系统设置都围绕这个限制设计。',
+        points: ['中心区域放主信息，边缘少放小字。', '滑动切换应用，上滑进应用库，实体键返回。', '长任务必须显示状态并允许离开。']
+      },
+      service: {
+        title: '服务层：让小设备借用大模型能力',
+        text: '设备只发最少的数据和任务意图，服务端负责天气、语音识别、MiniMax 生成、Reset 摘要和作品库存储。',
+        points: ['模型密钥绝不写入固件。', '耗时任务采用提交、轮询、恢复的结构。', '返回内容要裁剪成圆屏可读的摘要。']
+      },
+      delivery: {
+        title: '交付层：能复现、能检查、能继续开发',
+        text: '开源项目不只是代码，还要有构建步骤、测试、隐私扫描、安全说明、真实截图和二次开发文档。',
+        points: ['GitHub Pages 展示成果和原理。', 'CI 检查测试、依赖和公开树泄密。', 'README 告诉别人从哪里开始。']
+      }
+    };
+    const conceptTitle = document.getElementById('conceptTitle');
+    const conceptText = document.getElementById('conceptText');
+    const conceptList = document.getElementById('conceptList');
+    document.querySelectorAll('.concept-dot').forEach(dot => dot.addEventListener('click', () => {
+      document.querySelectorAll('.concept-dot').forEach(item => item.classList.toggle('active', item === dot));
+      const concept = concepts[dot.dataset.concept];
+      conceptTitle.textContent = concept.title;
+      conceptText.textContent = concept.text;
+      conceptList.innerHTML = concept.points.map(point => `<div>${point}</div>`).join('');
+    }));
+
+    const flows = {
+      voice: ['录音、显示声波，发送短音频与任务意图。', 'nginx 先检查客户端证书、Token、大小、频率和超时。', '服务端优先用 SenseVoice 识别，再把文字作为输入结果返回。'],
+      wallpaper: ['选择风格或语音描述，提交壁纸生成任务。', '入口限制图片请求频率，避免被人刷爆生成额度。', '服务端调用 MiniMax，裁剪成圆屏尺寸并保存作品状态。'],
+      quota: ['设备请求用量概览，不上传私密会话内容。', '入口确认只有这台设备能取到摘要。', '服务端读取既有统计文件，压缩成圆屏可读的数字和趋势。'],
+      weather: ['设备发送城市和刷新请求。', '入口做鉴权和频率限制。', '服务端读取天气数据，只返回当前温度、天气和建议。']
+    };
+    const flowDevice = document.getElementById('flowDevice');
+    const flowGateway = document.getElementById('flowGateway');
+    const flowService = document.getElementById('flowService');
+    document.querySelectorAll('.packet-btn').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.packet-btn').forEach(item => item.classList.toggle('active', item === btn));
+      const [device, gateway, service] = flows[btn.dataset.flow];
+      flowDevice.textContent = device;
+      flowGateway.textContent = gateway;
+      flowService.textContent = service;
+    }));
+
+    const memoryResult = document.getElementById('memoryResult');
+    const memoryPieces = document.getElementById('memoryPieces');
+    const memoryReset = document.getElementById('memoryReset');
+    const zones = [...document.querySelectorAll('.drop-zone')];
+    const pieces = [...document.querySelectorAll('.mem-piece')];
+    pieces.forEach(piece => {
+      piece.draggable = true;
+      piece.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', piece.textContent));
+      piece.addEventListener('click', () => placeMemoryPiece(piece, piece.dataset.target));
+    });
+    zones.forEach(zone => {
+      zone.addEventListener('dragover', event => event.preventDefault());
+      zone.addEventListener('drop', event => {
+        event.preventDefault();
+        const text = event.dataTransfer.getData('text/plain');
+        const piece = pieces.find(item => item.textContent === text);
+        if (piece) placeMemoryPiece(piece, zone.dataset.zone);
+      });
+    });
+    function placeMemoryPiece(piece, zoneName) {
+      const zone = zones.find(item => item.dataset.zone === zoneName);
+      if (!zone || piece.classList.contains('placed')) return;
+      zone.appendChild(piece);
+      piece.classList.add('placed');
+      const correct = piece.dataset.target === zoneName;
+      piece.style.borderColor = correct ? 'rgba(42,171,109,.5)' : 'rgba(255,138,52,.55)';
+      piece.style.background = correct ? '#edf8f3' : '#fff4e9';
+      const placed = document.querySelectorAll('.mem-piece.placed').length;
+      const mistakes = [...document.querySelectorAll('.mem-piece.placed')].filter(item => item.parentElement.dataset.zone !== item.dataset.target).length;
+      if (placed < pieces.length) {
+        memoryResult.textContent = `已放好 ${placed} / ${pieces.length} 张。`;
+      } else if (mistakes === 0) {
+        memoryResult.textContent = '全部正确：这就是避免 DMA、PSRAM、Flash 混用出问题的核心思路。';
+      } else {
+        memoryResult.textContent = `有 ${mistakes} 张位置不合适。真实项目里这种错误通常表现为花屏、卡顿或随机崩溃。`;
+      }
+    }
+    memoryReset.addEventListener('click', () => {
+      pieces.forEach(piece => {
+        piece.classList.remove('placed');
+        piece.style.borderColor = '';
+        piece.style.background = '';
+        memoryPieces.appendChild(piece);
+      });
+      memoryResult.textContent = '完成 4 张卡片后会看到解释。';
+    });
+
+    const quiz = [
+      {
+        q: '为什么耗时的 AI 生成不能直接卡在 UI 线程里等？',
+        a: ['因为 UI 会停止刷新，触摸也可能没有响应', '因为模型一定只能在 ESP32 本地运行', '因为圆屏不能联网'],
+        right: 0,
+        why: '正确。长任务要异步提交、保存任务编号、后台查询结果，用户才可以切到其他应用。'
+      },
+      {
+        q: '设备访问公网服务时，哪种做法更接近本项目的安全边界？',
+        a: ['只靠 URL 隐藏地址', '客户端证书和 Bearer Token 都要通过', '把模型 Key 写进固件里'],
+        right: 1,
+        why: '正确。mTLS 证明设备身份，Token 再做一层应用级授权，服务端密钥不下发。'
+      },
+      {
+        q: '为什么动态壁纸不应该把所有帧一次性塞进 RAM？',
+        a: ['RAM 太宝贵，应按帧或按块复用缓冲', 'Flash 比 RAM 更快', 'LVGL 不能显示图片'],
+        right: 0,
+        why: '正确。嵌入式系统常用分块、复用缓冲和局部刷新来换取稳定性。'
+      },
+      {
+        q: '烧录失败时按住 BOOT 的本质是什么？',
+        a: ['清空 Wi-Fi 配置', '强制芯片进入 ROM 下载模式', '让屏幕亮度变高'],
+        right: 1,
+        why: '正确。BOOT 影响上电启动模式，让电脑能通过 esptool 写入 Flash。'
+      }
+    ];
+    let quizIndex = 0;
+    const quizQuestion = document.getElementById('quizQuestion');
+    const quizProgress = document.getElementById('quizProgress');
+    const quizFeedback = document.getElementById('quizFeedback');
+    const quizOptions = document.getElementById('quizOptions');
+    const quizNext = document.getElementById('quizNext');
+    function renderQuiz() {
+      const item = quiz[quizIndex];
+      quizQuestion.textContent = item.q;
+      quizProgress.textContent = `第 ${quizIndex + 1} / ${quiz.length} 题`;
+      quizFeedback.textContent = '选择一个答案，页面会解释为什么。';
+      quizOptions.innerHTML = '';
+      item.a.forEach((answer, index) => {
+        const btn = document.createElement('button');
+        btn.className = 'quiz-option';
+        btn.type = 'button';
+        btn.textContent = answer;
+        btn.addEventListener('click', () => {
+          [...quizOptions.children].forEach(option => option.disabled = true);
+          btn.classList.add(index === item.right ? 'correct' : 'wrong');
+          quizOptions.children[item.right].classList.add('correct');
+          quizFeedback.textContent = item.why;
+        });
+        quizOptions.appendChild(btn);
+      });
+    }
+    quizNext.addEventListener('click', () => {
+      quizIndex = (quizIndex + 1) % quiz.length;
+      renderQuiz();
+    });
+    renderQuiz();
 
     const sections = [...document.querySelectorAll('section[id]')];
     const navItems = [...document.querySelectorAll('.nav-links a[href^="#"]')];
