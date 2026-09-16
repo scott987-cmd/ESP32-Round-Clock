@@ -29,7 +29,11 @@ IPV4_CANDIDATE = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
 EMAIL_CANDIDATE = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 )
-ALLOWED_AUTHOR_NAMES = {"Round Clock Maintainer"}
+ALLOWED_AUTHOR_NAMES = {
+    "Round Clock Maintainer",
+    "dependabot[bot]",
+    "github-actions[bot]",
+}
 ALLOWED_AUTHOR_EMAIL_SUFFIX = "@users.noreply.github.com"
 
 
