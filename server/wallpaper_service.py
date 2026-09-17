@@ -35,6 +35,7 @@ import avatar_service
 import artwork_library
 import story_service
 import pet_service
+import music_jobs
 import reset_insights
 from reset_projection import project as project_reset
 from concurrent.futures import ThreadPoolExecutor
@@ -561,7 +562,7 @@ def downmix_pcm16le(audio: bytes, channels: int) -> bytes:
     return bytes(mono)
 
 
-def generate_music(prompt: str) -> dict[str, object]:
+def generate_music(prompt: str, station: str = '', request_id: str = '') -> dict[str, object]:
     """Generate a server-stored 16 kHz mono PCM song for the round clock."""
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("music prompt is required")
@@ -575,7 +576,8 @@ def generate_music(prompt: str) -> dict[str, object]:
         "model": MINIMAX_MUSIC_MODEL,
         "prompt": prompt,
         "lyrics": "",
-        "lyrics_optimizer": True,
+        "lyrics_optimizer": not bool(station),
+        "is_instrumental": bool(station),
         "output_format": "hex",
         "audio_setting": {
             "sample_rate": 16000,
@@ -595,8 +597,9 @@ def generate_music(prompt: str) -> dict[str, object]:
     )
     with MUSIC_GENERATION_LOCK:
         try:
-            with open_https(request, timeout=150) as response:
-                result = read_json_limited(response, 20 * 1024 * 1024)
+            with open_https(request, timeout=300) as response:
+                # Hex doubles the bytes; stereo doubles them again before downmix.
+                result = read_json_limited(response, MUSIC_PCM_MAX_BYTES * 4 + 65536)
         except urllib.error.HTTPError as error:
             detail = error.read(512).decode(errors="replace")
             raise RuntimeError(f"MiniMax music HTTP {error.code}: {detail}") from error
@@ -621,9 +624,11 @@ def generate_music(prompt: str) -> dict[str, object]:
             "prompt": prompt,
             "sampleRate": sample_rate,
             "channels": 1,
-            "durationMs": int(extra.get("music_duration") or 0),
+            "durationMs": len(audio) * 1000 // 32000,
             "bytes": len(audio),
             "provider": f"minimax/{MINIMAX_MUSIC_MODEL}",
+            "station": station,
+            "musicRequestId": request_id,
         }
         metadata['artworkId']=artwork_library.store('music',audio,metadata)
         atomic_write(MUSIC_PCM, audio)
@@ -732,6 +737,16 @@ class WallpaperHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path in ('/v1/music', '/v1/music/status'):
+            if not self.authorized():self.send_error(HTTPStatus.UNAUTHORIZED);return
+            try:
+                query = urllib.parse.parse_qs(parsed.query)
+                value = music_jobs.job(query['job'][0]) if 'job' in query else music_jobs.snapshot()
+                self.send_json(HTTPStatus.OK, value)
+            except ValueError:self.send_error(HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:self.send_error(HTTPStatus.NOT_FOUND)
+            except (OSError, sqlite3.Error):self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)
+            return
         if parsed.path == '/v1/pet':
             if not self.authorized():self.send_error(HTTPStatus.UNAUTHORIZED);return
             try:
@@ -766,7 +781,7 @@ class WallpaperHandler(BaseHTTPRequestHandler):
             try:
                 query=urllib.parse.parse_qs(parsed.query)
                 if 'id' not in query:
-                    self.send_json(HTTPStatus.OK,artwork_library.list_works(int(query.get('offset',['0'])[0]),query.get('trash',['0'])[0]=='1'))
+                    self.send_json(HTTPStatus.OK,artwork_library.list_works(int(query.get('offset',['0'])[0]),query.get('trash',['0'])[0]=='1',query.get('kind',[''])[0]))
                 else:
                     data=artwork_library.read(query['id'][0],query.get('part',['data'])[0])
                     self.send_response(HTTPStatus.OK)
@@ -1079,7 +1094,17 @@ class WallpaperHandler(BaseHTTPRequestHandler):
                 return
             try:
                 value = json.loads(self.rfile.read(content_length))
+                if not isinstance(value, dict):
+                    raise ValueError('music request must be an object')
+                if 'requestId' in value:
+                    job = music_jobs.start(value.get('requestId'), value.get('prompt'),
+                                           value.get('station', ''), generate_music)
+                    self.send_json(HTTPStatus.OK, job)
+                    return
                 metadata = generate_music(value.get("prompt"))
+            except BlockingIOError:
+                self.send_error(HTTPStatus.TOO_MANY_REQUESTS, 'music generation busy or limit reached')
+                return
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
                 self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
                 return
@@ -1180,6 +1205,7 @@ def serve(host: str, port: int) -> None:
     artwork_library.migrate_current(STATE_DIR)
     story_service.recover()
     pet_service.recover()
+    music_jobs.recover()
     server = BoundedThreadingHTTPServer((host, port), WallpaperHandler)
     print(f"serving wallpaper on {host}:{port}", flush=True)
     server.serve_forever()

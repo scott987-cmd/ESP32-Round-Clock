@@ -14,7 +14,7 @@ import urllib.parse
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-MODULES=('wallpaper_service.py','reset_projection.py','reset_insights.py','pet_service.py')
+MODULES=('wallpaper_service.py','reset_projection.py','reset_insights.py','pet_service.py','music_jobs.py','artwork_library.py')
 REMOTE=r'''
 import base64,hashlib,json,os,pathlib,py_compile,shutil,subprocess,sys,time
 data=json.load(sys.stdin)
@@ -28,7 +28,7 @@ backup.mkdir(parents=True,exist_ok=False)
 shutil.copy2(site,backup/'nginx.conf')
 previous={}
 for name,encoded in data.items():
-    if name not in ('wallpaper_service.py','reset_projection.py','reset_insights.py','pet_service.py'):
+    if name not in ('wallpaper_service.py','reset_projection.py','reset_insights.py','pet_service.py','music_jobs.py','artwork_library.py'):
         raise SystemExit('Unexpected deployment module')
     path=root/name;previous[name]=path.exists()
     if path.exists():shutil.copy2(path,backup/name)
@@ -37,11 +37,15 @@ for name,encoded in data.items():
 try:
     for name in data:
         dest=root/name;shutil.copy2(backup/(name+'.candidate'),dest);dest.chmod(0o644)
+    if 'location = /v1/music/status' not in config:
+        needle='    location = /v1/music {'
+        if config.count(needle)!=1:raise RuntimeError('Ambiguous music insertion point')
+        config=config.replace(needle,'    location = /v1/music/status {\n        limit_req zone=round_clock_api burst=30 nodelay;\n        proxy_pass http://127.0.0.1:18080;\n    }\n\n'+needle)
     if 'location = /v1/pet' not in config:
         needle='    location = /v1/stories {'
         if config.count(needle)!=1:raise RuntimeError('Ambiguous nginx insertion point')
         config=config.replace(needle,'    location = /v1/pet {\n        client_max_body_size 2k;\n        proxy_pass http://127.0.0.1:18080;\n    }\n\n'+needle)
-        site.write_text(config)
+    site.write_text(config)
     subprocess.run(['nginx','-t'],check=True,capture_output=True)
     subprocess.run(['systemctl','restart','esp32-wallpaper'],check=True,capture_output=True)
     time.sleep(2)

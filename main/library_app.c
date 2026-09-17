@@ -11,8 +11,8 @@
 #include <string.h>
 
 typedef struct {char id[33],kind[16],title[241],date[32];bool favorite,selected,thumbnail;} item_t;
-typedef struct {item_t items[6];int count,offset;bool more,trash,offline;} page_t;
-typedef struct {int type,offset;bool trash,value;char id[33],action[16];} request_t;
+typedef struct {item_t items[6];int count,offset;bool more,trash,offline,music_only;} page_t;
+typedef struct {int type,offset;bool trash,value,music_only;char id[33],action[16];} request_t;
 static lv_obj_t *view,*heading,*status,*title_label,*date_label,*preview,*prev,*next,*favorite,*use,*remove_button,*confirm,*kind_label;
 static const lv_font_t *body_font,*title_font;
 static void (*go_home)(void);
@@ -25,6 +25,7 @@ static lv_image_dsc_t image;
 static char thumb_id[33],incoming_id[33],message[100]="正在连接作品库";
 static bool active,busy,finished,success,deleted_confirmation;
 static bool music_was_playing;
+static bool next_music_only,music_only,reload_on_finish;
 static int item_index,last_type;
 static request_t request;
 
@@ -64,16 +65,17 @@ static void worker(void *unused)
     size_t capacity=r.type==2?32769:8192;uint8_t *data=heap_caps_calloc(1,capacity,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     bool ok=false;page_t *new_page=NULL;
     if(data) {
-        if(r.type==1)snprintf(path,sizeof(path),"/v1/library?offset=%d&trash=%d",r.offset,r.trash);
+        if(r.type==1)snprintf(path,sizeof(path),"/v1/library?offset=%d&trash=%d&kind=%s",r.offset,r.trash,r.music_only?"music":"");
         else if(r.type==2)snprintf(path,sizeof(path),"/v1/library?id=%s&part=thumb",r.id);
         else strlcpy(path,"/v1/library",sizeof(path));
         snprintf(body,sizeof(body),"{\"id\":\"%s\",\"action\":\"%s\",\"value\":%s}",r.id,r.action,r.value?"true":"false");
         ok=device_api(path,r.type==3?body:NULL,data,capacity,&length)==ESP_OK;
         if(r.type==1) {
-            if(!ok) {FILE *f=fopen("/wallpaper/library.json","rb");if(f) {length=fread(data,1,capacity-1,f);data[length]=0;fclose(f);}else length=0;}
+            const char *cache=r.music_only?"/wallpaper/library-music.json":"/wallpaper/library.json";
+            if(!ok) {FILE *f=fopen(cache,"rb");if(f) {length=fread(data,1,capacity-1,f);data[length]=0;fclose(f);}else length=0;}
             new_page=heap_caps_calloc(1,sizeof(page_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-            if(new_page) {parse_page(new_page,(char *)data);new_page->offline=!ok;}
-            if(ok) {FILE *f=fopen("/wallpaper/library.json","wb");if(f){fwrite(data,1,length,f);fclose(f);}}
+            if(new_page) {parse_page(new_page,(char *)data);new_page->offline=!ok;new_page->music_only=r.music_only;}
+            if(ok) {FILE *f=fopen(cache,"wb");if(f){fwrite(data,1,length,f);fclose(f);}}
         } else if(r.type==2)ok=ok&&length==32768;
         else if(ok&&!strcmp(r.action,"select"))wallpaper_input_request_reload();
     }
@@ -89,11 +91,11 @@ static bool launch(request_t r)
     if(xTaskCreateWithCaps(worker,"library",8192,NULL,3,NULL,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)!=pdPASS){busy=false;strlcpy(message,"内存忙，请稍后刷新",sizeof(message));return false;}
     return true;
 }
-static void load_page(int offset,bool trash) {deleted_confirmation=false;launch((request_t){.type=1,.offset=offset,.trash=trash});}
+static void load_page(int offset,bool trash) {deleted_confirmation=false;launch((request_t){.type=1,.offset=offset,.trash=trash,.music_only=music_only});}
 static void render(void)
 {
     if(!active)return;
-    item_t *item=current();lv_label_set_text(heading,page&&page->trash?"回收站":"作品相册");
+    item_t *item=current();lv_label_set_text(heading,page&&page->trash?"回收站":music_only?"我的音乐":"作品相册");
     lv_label_set_text(status,busy?"正在同步…":message);
     lv_label_set_text(title_label,item?item->title:"还没有作品");
     if(item)lv_label_set_text_fmt(date_label,"%s · 第 %d 项",item->date,page->offset+item_index+1);
@@ -150,10 +152,15 @@ static void tick(lv_timer_t *t)
     bool done=finished,ok=success;int type=last_type;
     if(done) {
         finished=false;busy=false;
-        if(incoming){heap_caps_free(page);page=incoming;incoming=NULL;item_index=0;}
+        if(incoming){
+            if(incoming->music_only==music_only){heap_caps_free(page);page=incoming;item_index=0;}
+            else {heap_caps_free(incoming);reload_on_finish=true;}
+            incoming=NULL;
+        }
         if(incoming_thumb){heap_caps_free(thumbnail);thumbnail=incoming_thumb;incoming_thumb=NULL;strlcpy(thumb_id,incoming_id,sizeof(thumb_id));}
     }
     xSemaphoreGive(mutex);
+    if(done&&reload_on_finish){reload_on_finish=false;load_page(0,false);render();return;}
     if(done) {
         strlcpy(message,ok?(type==3?"操作已保存":"作品已同步"):(type==1?"离线 · 显示上次作品列表":"操作失败，请检查网络后重试"),sizeof(message));
         deleted_confirmation=false;
@@ -177,11 +184,15 @@ void library_app_create(lv_obj_t *screen,const lv_font_t *body,const lv_font_t *
     timer=lv_timer_create(tick,150,NULL);
 }
 lv_obj_t *library_app_view(void) {return view;}
+void library_app_open_music(void) {next_music_only=true;}
 void library_app_set_active(bool enabled)
 {
     if(active==enabled)return;
     active=enabled;
     if(!enabled){lv_obj_clean(view);heap_caps_free(thumbnail);thumbnail=NULL;thumb_id[0]=0;return;}
+    music_only=next_music_only;next_music_only=false;
+    if(page&&page->music_only!=music_only){heap_caps_free(page);page=NULL;item_index=0;}
+    if(busy)reload_on_finish=true;
     heading=label(view,"作品相册",73,34,320,title_font);status=label(view,"",55,73,356,body_font);
     title_label=label(view,"",65,99,336,body_font);lv_label_set_long_mode(title_label,LV_LABEL_LONG_DOT);lv_obj_set_height(title_label,50);
     preview=lv_image_create(view);lv_obj_set_pos(preview,169,150);kind_label=label(view,LV_SYMBOL_IMAGE,169,190,128,&lv_font_montserrat_48);
@@ -198,6 +209,8 @@ void library_app_set_active(bool enabled)
 void library_app_debug(cJSON *root)
 {
     cJSON_AddBoolToObject(root,"library_active",active);cJSON_AddBoolToObject(root,"library_busy",busy);
+    cJSON_AddBoolToObject(root,"library_music_only",music_only);
+    cJSON_AddStringToObject(root,"library_kind",current()?current()->kind:"");
     cJSON_AddNumberToObject(root,"library_count",page?page->count:0);cJSON_AddNumberToObject(root,"library_index",item_index);
     cJSON_AddStringToObject(root,"library_id",current()?current()->id:"");cJSON_AddBoolToObject(root,"library_trash",page&&page->trash);
     cJSON_AddBoolToObject(root,"library_favorite",current()&&current()->favorite);cJSON_AddStringToObject(root,"library_message",message);

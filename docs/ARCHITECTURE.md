@@ -52,7 +52,7 @@ Round Clock OS 把资源受限的圆屏终端与可扩展的互联网服务分�
 | `/v1/weather` | 缓存后的天气 |
 | `/v1/transcribe` | 16 kHz PCM 语音识别 |
 | `/v1/wallpaper`, `/v1/wallpaper/generate` | 壁纸读取与生成 |
-| `/v1/music`, `/v1/music/latest` | 音乐生成与播放数据 |
+| `/v1/music`, `/v1/music/status`, `/v1/music/latest` | 幂等后台音乐生成、持久任务与频道作品状态、兼容旧版播放数据 |
 | `/v1/avatars` | 头像清单、读取与上传 |
 | `/v1/quota`, `/v1/agents` | 外部助手上传的只读投影 |
 | `/v1/notes` | 语音笔记与服务端摘要 |

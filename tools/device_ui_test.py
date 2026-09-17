@@ -164,12 +164,12 @@ def main():
         d.view('radio')
         music_before = d.state()['music_status']
         d.tap(230, 160)
-        check('radio station selection acknowledged', any('频道已选择' in v['text'] for v in d.state()['labels']))
+        check('radio station selection acknowledged', d.state()['radio_station'] == 2)
         check('radio selection preserves existing music state', d.state()['music_status'] == music_before)
         d.screenshot('radio-selected')
         time.sleep(3.1)
-        if music_before == 'MUSIC READY - TAP PLAY':
-            check('radio restores playable music hint', any('音乐已生成' in v['text'] for v in d.state()['labels']))
+        expected = '频道音乐已保存' if d.state()['music_saved'][2] else '频道还没有音乐'
+        check('radio shows selected channel availability', any(expected in v['text'] for v in d.state()['labels']))
         # Very short recordings stay below the upload threshold: no paid model call.
         for name, record_y, stop_y, field, failure in [
             ('music', 210, 210, 'music_status', 'MUSIC IDEA FAILED'),

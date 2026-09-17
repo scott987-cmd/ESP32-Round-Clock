@@ -71,4 +71,27 @@ class ArtworkHTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request('/v1/pet?id='+('3'*32))[1])['status'],'working')
         self.assertEqual(self.request('/v1/pet?id='+('3'*32)+'&audio=1')[0],400)
 
+    def test_music_status_auth_persistence_and_async_submission(self):
+        for route in ['/v1/music/status', '/v1/music/status?job='+('4'*32)]:
+            self.assertEqual(self.request(route, auth=False)[0], 401)
+        payload = {'requestId': '4'*32, 'prompt': 'sky', 'station': 'sky'}
+        self.assertEqual(self.request('/v1/music', payload, False)[0], 401)
+        self.assertEqual(self.request('/v1/music', [])[0], 422)
+        self.assertEqual(self.request('/v1/music/status?job=../key')[0], 400)
+        self.assertEqual(self.request('/v1/music/status?job='+('4'*32))[0], 404)
+        with patch.object(SERVICE.music_jobs, 'worker'):
+            self.assertEqual(self.request('/v1/music', payload)[0], 200)
+            self.assertEqual(self.request('/v1/music', payload)[0], 200)
+            self.assertEqual(self.request('/v1/music', dict(payload, station='aurora'))[0], 422)
+        SERVICE.music_jobs.ACTIVE.clear()
+        ident = SERVICE.artwork_library.store('music', b'\x01\x00'*100, {'station':'sky'})
+        status, body = self.request('/v1/music/status')
+        self.assertEqual(status, 200)
+        saved = json.loads(body)['stations']['sky']['artworkId']
+        self.assertEqual(saved, ident)
+        self.assertEqual(self.request('/v1/library?id='+saved+'&part=data')[1], b'\x01\x00'*100)
+        songs = json.loads(self.request('/v1/library?kind=music')[1])['items']
+        self.assertEqual([item['id'] for item in songs], [ident])
+        self.assertEqual(self.request('/v1/library?kind=invalid')[0], 400)
+
 if __name__=='__main__':unittest.main()

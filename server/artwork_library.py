@@ -81,11 +81,12 @@ def public(row, selected):
                 favorite=bool(row['favorite']),deleted=bool(row['deleted']),selected=row['id'] in selected,
                 thumbnail=(ROOT/f"{row['id']}.thumb").is_file())
 
-def list_works(offset=0,trash=False):
+def list_works(offset=0,trash=False,kind=''):
     if type(offset) is not int or not 0<=offset<=100000:raise ValueError('invalid page')
+    if not isinstance(kind,str) or (kind != '' and kind not in KINDS):raise ValueError('invalid kind')
     with connect() as db:
         selected={r[0] for r in db.execute('SELECT id FROM selections')}
-        rows=db.execute('SELECT * FROM works WHERE deleted=? ORDER BY favorite DESC,created DESC,id LIMIT 7 OFFSET ?',(int(trash),offset)).fetchall()
+        rows=db.execute('SELECT * FROM works WHERE deleted=? AND (?=\'\' OR kind=?) ORDER BY favorite DESC,created DESC,id LIMIT 7 OFFSET ?',(int(trash),kind,kind,offset)).fetchall()
     return dict(items=[public(r,selected) for r in rows[:6]],offset=offset,more=len(rows)>6,trash=trash)
 
 def mutate(ident,action,value=None):

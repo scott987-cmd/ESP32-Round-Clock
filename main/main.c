@@ -265,17 +265,10 @@ static uint32_t voice_animation_frame;
 static wifi_ap_record_t scanned_networks[WIFI_SCAN_MAX_RESULTS];
 static uint16_t scanned_network_count;
 static char selected_wifi_ssid[sizeof(((wifi_config_t *)0)->sta.ssid)];
-static const char *radio_prompt_prefix =
-    "AI radio station: Night sky focus. Create an instrumental radio track with a clear mood.";
-static bool radio_channel_selected;
-static int64_t radio_channel_feedback_until;
+static unsigned radio_station = 1;
 static lv_obj_t *radio_station_buttons[3];
 static lv_obj_t *record_controls[4], *finish_controls[4];
-static const char *radio_station_prompts[3] = {
-    "AI radio station: Night sky focus. Create an instrumental radio track with a calm forward pulse.",
-    "AI radio station: Aurora sleep. Create an instrumental ambient radio track, slow, spacious and warm.",
-    "AI radio station: Energy core. Create an instrumental electronic radio track with an optimistic beat.",
-};
+static lv_obj_t *music_play_button, *radio_play_button;
 
 static const app_view_t desktop_launcher_targets[] = {
     APP_VIEW_CLOCK, APP_VIEW_WEATHER, APP_VIEW_AVATAR, APP_VIEW_REMOTE,
@@ -751,9 +744,10 @@ static const char *localized_remote_status(const char *status)
         {"RECORDING MUSIC IDEA - TAP STOP", "正在录音，点击停止"},
         {"RECOGNIZING MUSIC IDEA...", "正在识别想法"},
         {"CREATING MUSIC...", "正在生成音乐"},
-        {"MUSIC READY - TAP PLAY", "音乐已生成，点击试听"},
+        {"MUSIC READY - TAP PLAY", "音乐已保存，可播放或打开作品库"},
         {"PLAYING MUSIC...", "正在试听"},
-        {"MUSIC CREATION FAILED", "音乐生成失败"},
+        {"MUSIC CREATION FAILED", "本次生成失败，已保存作品仍可播放"},
+        {"MUSIC SYNC FAILED", "网络暂不可用，正在重试同步"},
         {"MUSIC PLAYBACK FAILED", "音乐试听失败"},
         {"MUSIC IDEA FAILED", "音乐想法失败"},
         {"READY FOR WALLPAPER IDEA", "说出壁纸画面"},
@@ -852,23 +846,43 @@ static void music_refresh_status_locked(void)
         lv_label_set_text(music_status_label,
                           localized_remote_status(music_input_status()));
     }
+    music_input_state_t s = music_input_state();
+    if (music_play_button) {
+        if (s.playing || (!s.busy && s.saved[0][0])) lv_obj_remove_state(music_play_button, LV_STATE_DISABLED);
+        else lv_obj_add_state(music_play_button, LV_STATE_DISABLED);
+        lv_label_set_text(lv_obj_get_child(music_play_button, 0), s.playing ? LV_SYMBOL_STOP : LV_SYMBOL_PLAY);
+    }
+    if (s.busy && !s.recording) lv_obj_add_state(record_controls[1], LV_STATE_DISABLED);
 }
 
 static void radio_refresh_status_locked(void)
 {
     update_record_controls(2, music_input_status(), music_input_is_recording() && voice_input_is_recording());
+    music_input_state_t s = music_input_state();
+    bool recording = s.recording && voice_input_is_recording();
+    bool can_generate = recording || (!s.busy && !voice_input_is_recording() && !voice_input_is_processing());
+    if (can_generate) lv_obj_remove_state(finish_controls[2], LV_STATE_DISABLED);
+    else lv_obj_add_state(finish_controls[2], LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(finish_controls[2], lv_color_hex(can_generate ? 0x596DEB : 0xE4E6ED), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(finish_controls[2], 0), lv_color_hex(can_generate ? 0xFFFFFF : 0x737988), 0);
+    lv_label_set_text(lv_obj_get_child(finish_controls[2], 0), recording ? localized("STOP / CREATE", "结束并生成") : localized("NEW TRACK", "生成频道音乐"));
+    if (s.busy && !recording) lv_obj_add_state(record_controls[2], LV_STATE_DISABLED);
+    if (radio_play_button) {
+        if (s.playing || (!s.busy && s.saved[radio_station][0])) lv_obj_remove_state(radio_play_button, LV_STATE_DISABLED);
+        else lv_obj_add_state(radio_play_button, LV_STATE_DISABLED);
+        lv_label_set_text(lv_obj_get_child(radio_play_button, 0), s.playing ? LV_SYMBOL_STOP : LV_SYMBOL_PLAY);
+    }
+    for (unsigned i = 0; i < 3; i++) {
+        bool selected = radio_station == i + 1;
+        lv_obj_set_style_bg_color(radio_station_buttons[i], lv_color_hex(selected ? 0x596DEB : 0xFFFFFF), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(radio_station_buttons[i], 0), lv_color_hex(selected ? 0xFFFFFF : 0x596DEB), 0);
+    }
     if (radio_status_label != NULL) {
         const char *status = music_input_status();
-        bool selected_feedback = esp_timer_get_time() < radio_channel_feedback_until &&
-                                 (strcmp(status, "MUSIC READY - TAP PLAY") == 0 ||
-                                  strcmp(status, "MUSIC IDEA FAILED") == 0);
-        if (strcmp(status, "READY FOR MUSIC IDEA") == 0 || selected_feedback) {
-            lv_label_set_text(radio_status_label,
-                              localized("PICK A CHANNEL, THEN SPEAK",
-                                        radio_channel_selected ? "频道已选择，说出感受" : "选择频道，再说感受"));
-        } else {
-            lv_label_set_text(radio_status_label, localized_remote_status(music_input_status()));
-        }
+        if (s.busy || strstr(status, "FAILED")) lv_label_set_text(radio_status_label, localized_remote_status(status));
+        else lv_label_set_text(radio_status_label, s.saved[radio_station][0] ?
+            localized("CHANNEL SAVED - TAP PLAY", "频道音乐已保存，点击播放") :
+            localized("CREATE A TRACK; VOICE IS OPTIONAL", "频道还没有音乐，点击生成\n也可以先说出想法"));
     }
 }
 
@@ -975,6 +989,7 @@ static void clock_timer_cb(lv_timer_t *timer)
     wifi_setup_refresh_locked();
     companion_apps_tick(screen_on);
     notification_center_tick();
+    if (wifi_events && (xEventGroupGetBits(wifi_events) & WIFI_READY_BIT)) music_input_refresh();
     if (current_app_view == APP_VIEW_REMOTE) remote_refresh_status_locked();
     if (current_app_view == APP_VIEW_MUSIC) music_refresh_status_locked();
     if (current_app_view == APP_VIEW_RADIO) radio_refresh_status_locked();
@@ -1248,6 +1263,14 @@ esp_err_t ui_debug_state(char *buffer, size_t capacity)
     cJSON_AddStringToObject(root, "quota_total", lv_label_get_text(quota_total_label));
     cJSON_AddStringToObject(root, "wallpaper_status", wallpaper_input_status());
     cJSON_AddStringToObject(root, "music_status", music_input_status());
+    music_input_state_t music = music_input_state();
+    cJSON_AddBoolToObject(root, "music_busy", music.busy);
+    cJSON_AddBoolToObject(root, "music_playing", music.playing);
+    cJSON_AddNumberToObject(root, "music_written", music.written);
+    cJSON_AddNumberToObject(root, "music_sequence", music.sequence);
+    cJSON_AddNumberToObject(root, "radio_station", radio_station);
+    cJSON *saved_music = cJSON_AddArrayToObject(root, "music_saved");
+    for (unsigned i = 0; i < 4; i++) cJSON_AddItemToArray(saved_music, cJSON_CreateString(music.saved[i]));
     wifi_setup_state_t setup; wifi_setup_state(&setup);
     cJSON_AddBoolToObject(root, "wifi_setup_active", setup.active);
     cJSON_AddBoolToObject(root, "wifi_setup_testing", setup.testing);
@@ -1879,6 +1902,8 @@ static void music_action_event_cb(lv_event_t *event)
         return;
     }
     intptr_t action = (intptr_t)lv_event_get_user_data(event);
+    if (action == 4) { library_app_open_music(); show_view_locked(APP_VIEW_LIBRARY); return; }
+    if (action == 3 && music_input_state().playing) { music_input_stop(); return; }
     esp_err_t result = action == 1 ? music_input_start() :
                        action == 2 ? music_input_finish() : music_input_play();
     music_refresh_status_locked();
@@ -1902,9 +1927,7 @@ static void radio_station_event_cb(lv_event_t *event)
         if (selected >= 3) {
             return;
         }
-        radio_prompt_prefix = radio_station_prompts[selected];
-        radio_channel_selected = true;
-        radio_channel_feedback_until = esp_timer_get_time() + 3000000;
+        radio_station = selected + 1;
         for (size_t i = 0; i < 3; ++i) {
             lv_obj_t *button = radio_station_buttons[i];
             if (button == NULL) {
@@ -1929,8 +1952,10 @@ static void radio_action_event_cb(lv_event_t *event)
         return;
     }
     intptr_t action = (intptr_t)lv_event_get_user_data(event);
-    esp_err_t result = action == 1 ? music_input_start_with_prefix(radio_prompt_prefix) :
-                       action == 2 ? music_input_finish() : music_input_play();
+    if (action == 4) { library_app_open_music(); show_view_locked(APP_VIEW_LIBRARY); return; }
+    if (action == 3 && music_input_state().playing) { music_input_stop(); return; }
+    esp_err_t result = action == 1 ? music_input_start_radio(radio_station) :
+                       action == 2 ? (music_input_is_recording() ? music_input_finish() : music_input_generate_radio(radio_station)) : music_input_play_station(radio_station);
     radio_refresh_status_locked();
     if (result != ESP_OK) {
         ESP_LOGW(TAG, "Radio action %d failed: %s", (int)action, esp_err_to_name(result));
@@ -3190,6 +3215,7 @@ static void create_music(lv_obj_t *screen)
     lv_obj_center(finish_label);
 
     lv_obj_t *play_button = lv_button_create(music_view);
+    music_play_button = play_button;
     lv_obj_set_size(play_button, 70, 70);
     lv_obj_align(play_button, LV_ALIGN_BOTTOM_MID, -62, -26);
     lv_obj_set_style_radius(play_button, LV_RADIUS_CIRCLE, 0);
@@ -3200,6 +3226,15 @@ static void create_music(lv_obj_t *screen)
     lv_label_set_text(play_icon, LV_SYMBOL_PLAY);
     lv_obj_set_style_text_font(play_icon, &lv_font_montserrat_20, 0);
     lv_obj_center(play_icon);
+
+    lv_obj_t *library = lv_button_create(music_view);
+    lv_obj_set_size(library, 250, 52);
+    lv_obj_align(library, LV_ALIGN_TOP_MID, 0, 286);
+    lv_obj_add_event_cb(library, music_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)4);
+    lv_obj_t *library_name = lv_label_create(library);
+    lv_label_set_text(library_name, localized("SAVED WORKS", "作品库 · 已保存音乐"));
+    lv_obj_set_style_text_font(library_name, localized_font(&lv_font_montserrat_16), 0);
+    lv_obj_center(library_name);
 
     lv_obj_t *home_button = lv_button_create(music_view);
     lv_obj_set_size(home_button, 52, 52);
@@ -3293,6 +3328,7 @@ static void create_radio(lv_obj_t *screen)
     lv_obj_center(stop_name);
 
     lv_obj_t *play = lv_button_create(radio_view);
+    radio_play_button = play;
     lv_obj_set_size(play, 62, 62);
     lv_obj_align(play, LV_ALIGN_BOTTOM_MID, -48, -22);
     lv_obj_set_style_radius(play, LV_RADIUS_CIRCLE, 0);
@@ -3301,6 +3337,15 @@ static void create_radio(lv_obj_t *screen)
     lv_obj_t *play_icon = lv_label_create(play);
     lv_label_set_text(play_icon, LV_SYMBOL_PLAY);
     lv_obj_center(play_icon);
+
+    lv_obj_t *library = lv_button_create(radio_view);
+    lv_obj_set_size(library, 206, 42);
+    lv_obj_align(library, LV_ALIGN_TOP_MID, 0, 330);
+    lv_obj_add_event_cb(library, radio_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)4);
+    lv_obj_t *library_name = lv_label_create(library);
+    lv_label_set_text(library_name, localized("SAVED WORKS", "作品库 · 全部音乐"));
+    lv_obj_set_style_text_font(library_name, localized_font(&lv_font_montserrat_16), 0);
+    lv_obj_center(library_name);
 
     lv_obj_t *home = lv_button_create(radio_view);
     lv_obj_set_size(home, 52, 52);
