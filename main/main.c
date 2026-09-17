@@ -18,6 +18,7 @@
 #include "screenshot_bridge.h"
 #include "ui_debug.h"
 #include "voice_input.h"
+#include "audio_bus.h"
 #include "wallpaper_input.h"
 #include "wifi_setup.h"
 #include "companion_apps.h"
@@ -749,6 +750,7 @@ static const char *localized_remote_status(const char *status)
         {"MUSIC CREATION FAILED", "本次生成失败，已保存作品仍可播放"},
         {"MUSIC SYNC FAILED", "网络暂不可用，正在重试同步"},
         {"MUSIC PLAYBACK FAILED", "音乐试听失败"},
+        {"RECORDING CANCELLED", "录音已取消"},
         {"MUSIC IDEA FAILED", "音乐想法失败"},
         {"READY FOR WALLPAPER IDEA", "说出壁纸画面"},
         {"RECORDING WALLPAPER IDEA - TAP STOP", "正在录音，点击停止"},
@@ -811,7 +813,7 @@ static void update_record_controls(unsigned app, const char *status, bool record
 {
     static const uint32_t colors[] = {0x147DF5, 0xA44BC4, 0x596DEB, 0x129EAF};
     bool busy = strstr(status, "RECOGNIZING") || strstr(status, "CREATING") ||
-                strstr(status, "PLAYING") || strstr(status, "FINISHING");
+                strstr(status, "FINISHING");
     bool ready = !recording && !busy && !voice_input_is_recording() &&
                  strcmp(voice_input_status(), "RECOGNIZING ONLINE...") != 0;
     if (app == 3 && wallpaper_input_has_pending_update()) ready = false;
@@ -960,6 +962,7 @@ static void clock_timer_cb(lv_timer_t *timer)
             bsp_display_backlight_off();
         }
         screen_on = requested_power != 0;
+        if(!screen_on)voice_input_cancel();
         star_game_set_active(screen_on && current_app_view == APP_VIEW_STARS);
         english_app_set_active(screen_on && current_app_view == APP_VIEW_ENGLISH);
         library_app_set_active(screen_on && current_app_view == APP_VIEW_LIBRARY);
@@ -1073,6 +1076,7 @@ static void clock_timer_cb(lv_timer_t *timer)
 
 static void show_view_locked(app_view_t view)
 {
+    if(view != current_app_view) voice_input_cancel();
     notification_center_close();
     lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(clock_view, LV_OBJ_FLAG_HIDDEN);
@@ -1263,6 +1267,9 @@ esp_err_t ui_debug_state(char *buffer, size_t capacity)
     cJSON_AddStringToObject(root, "quota_total", lv_label_get_text(quota_total_label));
     cJSON_AddStringToObject(root, "wallpaper_status", wallpaper_input_status());
     cJSON_AddStringToObject(root, "music_status", music_input_status());
+    cJSON_AddBoolToObject(root, "voice_recording", voice_input_is_recording());
+    cJSON_AddBoolToObject(root, "voice_processing", voice_input_is_processing());
+    cJSON_AddStringToObject(root, "voice_status", voice_input_status());
     music_input_state_t music = music_input_state();
     cJSON_AddBoolToObject(root, "music_busy", music.busy);
     cJSON_AddBoolToObject(root, "music_playing", music.playing);
@@ -4483,6 +4490,7 @@ static esp_err_t start_power_button(void)
 
 void app_main(void)
 {
+    audio_bus_init();
     ESP_ERROR_CHECK(nvs_flash_init());
     esp_err_t content_result=content_assets_init();
     ESP_LOGI(TAG,"Content partition: %s",esp_err_to_name(content_result));

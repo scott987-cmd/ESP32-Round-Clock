@@ -80,7 +80,6 @@ static void recognized(const char *text,void *context)
 }
 static bool reserve(void)
 {
-    if(audio_local_state().playing)return false;
     taskENTER_CRITICAL(&mux);
     bool available=state.phase!=PET_LISTENING&&state.phase!=PET_THINKING;
     if(available){state.phase=PET_LISTENING;state.reply[0]=0;}
@@ -113,8 +112,7 @@ esp_err_t pet_dialogue_play(void)
 void pet_dialogue_leave(void)
 {
     pet_dialogue_finish();
-    audio_local_state_t audio=audio_local_state();
-    if(audio.playing&&audio.sequence==playback_sequence)audio_local_stop();
+    audio_local_stop(playback_sequence);
 }
 #if CONFIG_ROUND_CLOCK_USB_TEST_BRIDGE
 esp_err_t pet_dialogue_test_text(const char *text)

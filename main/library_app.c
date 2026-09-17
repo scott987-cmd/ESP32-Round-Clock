@@ -105,7 +105,7 @@ static void render(void)
     lv_label_set_text(kind_label,item?(!strcmp(item->kind,"music")?LV_SYMBOL_AUDIO:!strcmp(item->kind,"story")?LV_SYMBOL_LIST:LV_SYMBOL_IMAGE):LV_SYMBOL_IMAGE);
     if(has_thumb) {image.data=thumbnail;lv_image_set_src(preview,&image);}
     hidden(favorite,!item||page->trash);hidden(use,!item);hidden(remove_button,!item||page->trash||item->selected);
-    if(item) {set_button(favorite,item->favorite?"已收藏":"收藏");set_button(use,page->trash?"恢复":!strcmp(item->kind,"music")?(strstr(music_input_status(),"PLAYING")?"停止":"播放"):!strcmp(item->kind,"story")?"阅读":item->selected?"已应用":"应用");}
+    if(item) {set_button(favorite,item->favorite?"已收藏":"收藏");set_button(use,page->trash?"恢复":!strcmp(item->kind,"music")?(music_input_state().playing?"停止":"播放"):!strcmp(item->kind,"story")?"阅读":item->selected?"已应用":"应用");}
     hidden(confirm,!deleted_confirmation);
     hidden(prev,!page||(!item_index&&!page->offset));hidden(next,!page||(item_index+1>=page->count&&!page->more));
 }
@@ -134,7 +134,7 @@ static void action(lv_event_t *event)
         else if(a==6) {
             if(page->trash)strlcpy(r.action,"restore",sizeof(r.action));
             else if(!strcmp(item->kind,"music")) {
-                if(strstr(music_input_status(),"PLAYING")){music_input_stop();strlcpy(message,"正在停止播放",sizeof(message));}
+                if(music_input_state().playing){music_input_stop();strlcpy(message,"正在停止播放",sizeof(message));}
                 else strlcpy(message,music_input_play_artwork(item->id)==ESP_OK?"正在播放，可切换应用":"声音正忙，请稍后重试",sizeof(message));
                 render();return;
             } else if(!strcmp(item->kind,"story")) {
@@ -169,7 +169,7 @@ static void tick(lv_timer_t *t)
         if(!active){heap_caps_free(thumbnail);thumbnail=NULL;thumb_id[0]=0;}
         render();
     }
-    bool playing=strstr(music_input_status(),"PLAYING")!=NULL;
+    bool playing=music_input_state().playing;
     if(playing!=music_was_playing){
         if(!playing&&active&&current()&&!strcmp(current()->kind,"music"))strlcpy(message,strstr(music_input_status(),"FAILED")?"播放失败，请稍后重试":"播放已结束，可再次播放",sizeof(message));
         music_was_playing=playing;render();

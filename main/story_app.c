@@ -37,6 +37,8 @@ static char job_id[33],download_id[33],cleanup_id[33],theme[16],message[128]="�
 static char cleanup_target[33];
 static atomic_bool cleaning;
 static uint32_t next_poll;
+static uint32_t playback_sequence;
+static void stop_reading(void) {audio_local_stop(playback_sequence);playback_sequence=0;}
 static int operation;
 static const char *download_error="下载未完成，请稍后重试";
 static volatile int storage_errno,storage_stage;
@@ -192,19 +194,20 @@ static void read_scene(void)
     esp_err_t result;
     if(online){char path[100];audio_path(path,sizeof(path),cached.id,scene);result=audio_local_play_file(path,cached.nodes[scene].bytes);}
     else result=audio_local_play_asset(builtin_story[scene].audio,builtin_story[scene].bytes);
-    if(result==ESP_OK)autoplay=false;
+    autoplay=false;
+    if(result==ESP_OK)playback_sequence=audio_local_state().sequence;
 }
 static void action(lv_event_t *e)
 {
     int a=(int)(intptr_t)lv_event_get_user_data(e);
     if(a==0){go_home();return;}
-    if(a==1||a==2){int node=online?(a==1?cached.nodes[scene].a:cached.nodes[scene].b):(a==1?builtin_story[scene].a:builtin_story[scene].b);if(node>=0)scene=node;audio_local_stop();autoplay=true;save_progress();render();}
-    if(a==3){audio_local_stop();autoplay=true;}
+    if(a==1||a==2){int node=online?(a==1?cached.nodes[scene].a:cached.nodes[scene].b):(a==1?builtin_story[scene].a:builtin_story[scene].b);if(node>=0)scene=node;stop_reading();autoplay=true;save_progress();render();}
+    if(a==3){stop_reading();autoplay=true;}
     if(a==4){lv_obj_remove_flag(menu,LV_OBJ_FLAG_HIDDEN);}
     if(a==5){lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);autoplay=true;}
     if(a==6||a==7){
         if(a==7&&!cached.id[0])return;
-        online=a==7;scene=0;audio_local_stop();autoplay=true;save_progress();lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);strlcpy(message,online?"已下载 · 离线可听":"内置故事 · 离线可听",sizeof(message));render();
+        online=a==7;scene=0;stop_reading();autoplay=true;save_progress();lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);strlcpy(message,online?"已下载 · 离线可听":"内置故事 · 离线可听",sizeof(message));render();
     }
     if(a>=10&&a<=12){
         if(busy||job_id[0]){lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);return;}
@@ -216,7 +219,7 @@ static void action(lv_event_t *e)
 static void tick(lv_timer_t *t)
 {
     (void)t;xSemaphoreTake(mutex,portMAX_DELAY);bool done=finished,success=ok;
-    if(done){finished=false;busy=false;if(clear_job)job_id[0]=0;if(incoming){audio_local_stop();strlcpy(cleanup_id,cached.id,sizeof(cleanup_id));cached=*incoming;heap_caps_free(incoming);incoming=NULL;online=true;scene=0;autoplay=active;}}
+    if(done){finished=false;busy=false;if(clear_job)job_id[0]=0;if(incoming){stop_reading();strlcpy(cleanup_id,cached.id,sizeof(cleanup_id));cached=*incoming;heap_caps_free(incoming);incoming=NULL;online=true;scene=0;autoplay=active;}}
     xSemaphoreGive(mutex);
     if(done){
         if(success&&active)lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);
@@ -236,8 +239,9 @@ static void tick(lv_timer_t *t)
         }
     }
     if(!busy&&job_id[0]&&(int32_t)(lv_tick_get()-next_poll)>=0){next_poll=lv_tick_get()+15000;launch(1);}
-    if(active&&autoplay&&!audio_local_state().playing)read_scene();
-    if(active)lv_label_set_text(lv_obj_get_child(play_button,0),audio_local_state().playing?"重听":"朗读");
+    if(active&&autoplay)read_scene();
+    audio_local_state_t audio=audio_local_state();
+    if(active)lv_label_set_text(lv_obj_get_child(play_button,0),audio.playing&&audio.sequence==playback_sequence?"重听":"朗读");
 }
 void story_app_create(lv_obj_t *screen,const lv_font_t *body,const lv_font_t *title,void (*home)(void))
 {
@@ -269,7 +273,7 @@ void story_app_set_active(bool value)
 {
     if(active==value)return;
     active=value;
-    if(!value){audio_local_stop();autoplay=false;lv_obj_clean(view);lv_image_cache_drop(&image);heap_caps_free(pixels);pixels=NULL;return;}
+    if(!value){stop_reading();autoplay=false;lv_obj_clean(view);lv_image_cache_drop(&image);heap_caps_free(pixels);pixels=NULL;return;}
     heading=label(view,"故事屋",83,29,300,body_font);status_label=label(view,"",55,64,356,body_font);
     pixels=heap_caps_calloc(1,32768,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);image=(lv_image_dsc_t){.header.magic=LV_IMAGE_HEADER_MAGIC,.header.cf=LV_COLOR_FORMAT_RGB565,.header.w=128,.header.h=128,.header.stride=256,.data_size=32768,.data=pixels};
     picture=lv_image_create(view);lv_obj_set_pos(picture,169,99);

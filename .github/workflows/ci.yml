@@ -23,6 +23,7 @@ jobs:
       - run: python tools/test_english_assets.py
       - run: python tools/test_notification_store.py
       - run: cc -Wall -Wextra -Werror -I main tools/test_reset_notice_state.c -o /tmp/test-reset-notices && /tmp/test-reset-notices
+      - run: cc -Wall -Wextra -Werror -I main tools/test_audio_focus.c -o /tmp/test-audio-focus && /tmp/test-audio-focus
       - run: bandit -q -r server macos/QuotaSync tools -x 'tools/test_*,server/test_*' -ll
       - run: pip-audit -r requirements.txt
       - run: python tools/check_public_tree.py

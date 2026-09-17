@@ -39,6 +39,7 @@ static TaskHandle_t voice_task_handle;
 static uint8_t *recording_buffer;
 static volatile voice_state_t voice_state = VOICE_IDLE;
 static volatile bool finish_requested;
+static audio_lease_t recording_lease;
 static volatile uint8_t current_voice_level;
 static char voice_status[VOICE_RESPONSE_BYTES] = "READY FOR ONLINE VOICE";
 static voice_input_transcript_cb_t transcript_callback;
@@ -203,10 +204,16 @@ static void voice_task(void *context)
             recording_buffer = heap_caps_malloc(VOICE_MAX_BYTES,
                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         }
-        if (recording_buffer == NULL || initialize_microphone() != ESP_OK) {
+        audio_lease_t lease = recording_lease;
+        esp_err_t mic_result = audio_bus_lock(lease);
+        if (mic_result == ESP_OK) {
+            mic_result = initialize_microphone();
+            audio_bus_unlock();
+        }
+        if (recording_buffer == NULL || mic_result != ESP_OK) {
             heap_caps_free(recording_buffer);
             recording_buffer = NULL;
-            audio_bus_release();
+            audio_bus_release(lease);
             voice_state = VOICE_IDLE;
             set_voice_status("MICROPHONE FAILED");
             deliver_transcript(NULL);
@@ -214,27 +221,31 @@ static void voice_task(void *context)
         }
 
         size_t recorded = 0;
+        bool capture_failed = false;
         int64_t capture_started_us = esp_timer_get_time();
         while (!finish_requested && recorded + VOICE_READ_BYTES <= VOICE_MAX_BYTES) {
+            if (audio_bus_lock(lease) != ESP_OK) {capture_failed=true;break;}
             int read_result = esp_codec_dev_read(microphone_codec,
                                                  recording_buffer + recorded,
                                                  VOICE_READ_BYTES);
+            audio_bus_unlock();
             if (read_result != ESP_CODEC_DEV_OK) {
                 ESP_LOGE(TAG, "Microphone read failed: %d", read_result);
+                capture_failed=true;
                 break;
             }
             current_voice_level = audio_level(recording_buffer + recorded, VOICE_READ_BYTES);
             recorded += VOICE_READ_BYTES;
         }
         current_voice_level = 0;
-        audio_bus_release();
+        bool cancelled = !audio_bus_finish(lease);
         /* PCM length is bytes, not samples. Warm DMA can also deliver queued
          * frames immediately, so require half a second of real capture time. */
-        if (recorded < VOICE_SAMPLE_RATE * sizeof(int16_t) / 2 ||
+        if (cancelled || capture_failed || recorded < VOICE_SAMPLE_RATE * sizeof(int16_t) / 2 ||
             esp_timer_get_time() - capture_started_us < 500000) {
             heap_caps_free(recording_buffer);
             recording_buffer = NULL;
-            set_voice_status("RECORDING TOO SHORT");
+            set_voice_status(cancelled ? "RECORDING CANCELLED" : "RECORDING TOO SHORT");
             deliver_transcript(NULL);
             continue;
         }
@@ -267,16 +278,15 @@ esp_err_t voice_input_start_with_callback(voice_input_transcript_cb_t callback,
     if (voice_state != VOICE_IDLE) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (!audio_bus_try_acquire()) return ESP_ERR_INVALID_STATE;
     if (voice_task_handle == NULL) {
         BaseType_t created = xTaskCreatePinnedToCore(voice_task, "voice_input", 8192, NULL, 4,
                                                      &voice_task_handle, 1);
         if (created != pdPASS) {
-            audio_bus_release();
             voice_task_handle = NULL;
             return ESP_ERR_NO_MEM;
         }
     }
+    recording_lease = audio_bus_request();
     finish_requested = false;
     current_voice_level = 0;
     transcript_callback = callback;
@@ -295,6 +305,11 @@ esp_err_t voice_input_finish(void)
     finish_requested = true;
     set_voice_status("FINISHING RECORDING...");
     return ESP_OK;
+}
+
+void voice_input_cancel(void)
+{
+    if (voice_state == VOICE_RECORDING) audio_bus_release(recording_lease);
 }
 
 bool voice_input_is_recording(void)

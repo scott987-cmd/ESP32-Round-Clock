@@ -11,6 +11,8 @@ esp_err_t voice_input_start(void);
 esp_err_t voice_input_start_with_callback(voice_input_transcript_cb_t callback,
                                           void *context);
 esp_err_t voice_input_finish(void);
+/* Discard an unfinished recording; never submit it for transcription. */
+void voice_input_cancel(void);
 bool voice_input_is_recording(void);
 bool voice_input_is_processing(void);
 uint8_t voice_input_level(void);

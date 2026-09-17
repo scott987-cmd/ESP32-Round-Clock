@@ -72,7 +72,7 @@ def main():
             if args.full_playback:
                 print('RUNNING complete saved-channel playback', flush=True)
                 duration = server['stations']['sky']['durationMs']
-                s = wait(lambda s: not s['music_busy'], duration/1000 + 90)
+                s = wait(lambda s: not s['music_playing'], duration/1000 + 90)
                 assert s['music_status'] == 'MUSIC READY - TAP PLAY'
                 assert abs(s['music_written'] - duration*32) < 32
                 print('PASS entire track written to speaker without truncation', flush=True)

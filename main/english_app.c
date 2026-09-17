@@ -31,7 +31,7 @@ static void visible(lv_obj_t *object,bool enabled)
     if(enabled) lv_obj_remove_flag(object,LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);
 }
-static void cancel_reading(void) { audio_local_stop(); waiting_sequence=0; auto_read_pending=false; }
+static void cancel_reading(void) { audio_local_stop(waiting_sequence); waiting_sequence=0; auto_read_pending=false; }
 
 static void render(void)
 {
@@ -87,7 +87,8 @@ static void read_word(void)
     if(!active || !assets_valid || (quiz&&correct==5)) return;
     auto_read_pending=false;
     if(audio_bus_volume()==0) { lv_label_set_text(hint,"音量为零，请到设置调节"); return; }
-    if(waiting_sequence && audio_local_state().playing) return;
+    audio_local_state_t current=audio_local_state();
+    if(waiting_sequence==current.sequence && current.playing) return;
     unsigned index=quiz?target:card;
     esp_err_t result=content_word_play(index);
     if(result!=ESP_OK) { lv_label_set_text(hint,result==ESP_ERR_INVALID_STATE?"声音正忙，请稍后点读":"播放失败，请再试一次"); return; }
@@ -99,12 +100,12 @@ static void audio_tick(lv_timer_t *timer)
 {
     (void)timer;
     if(!active) return;
-    /* Let the previous local clip finish cancelling before starting a new
-     * question. This timer is paused when the app or display is hidden. */
-    if(auto_read_pending && !audio_local_state().playing) read_word();
+    /* A new question is a single playback intent, not a retry loop for focus. */
+    if(auto_read_pending) read_word();
     if(!waiting_sequence) return;
     audio_local_state_t state=audio_local_state();
-    if(state.sequence!=waiting_sequence || state.playing) return;
+    if(state.sequence!=waiting_sequence) {waiting_sequence=0;return;}
+    if(state.playing) return;
     waiting_sequence=0;
     if(state.result==ESP_OK) {
         heard=true;

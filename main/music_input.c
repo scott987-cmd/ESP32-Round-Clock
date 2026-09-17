@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "cJSON.h"
 #include "esp_http_client.h"
 #include "esp_heap_caps.h"
@@ -24,10 +25,12 @@ extern const uint8_t device_client_key_start[] asm("_binary_device_client_key_st
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 static music_input_state_t state;
 static bool busy;
-static volatile bool stop_playback;
+static audio_lease_t playback_lease;
+static unsigned playback_workers;
+typedef struct {audio_lease_t lease;uint32_t sequence;char url[256];} playback_job_t;
 static int64_t next_sync;
 static char music_status[80] = "READY FOR MUSIC IDEA";
-static char music_prompt[1024], music_prefix[512], playback_url[256];
+static char music_prompt[1024], music_prefix[512];
 static unsigned recording_station;
 static const char *station_ids[] = {"", "sky", "aurora", "energy"};
 static const char *station_prompts[] = {
@@ -35,7 +38,7 @@ static const char *station_prompts[] = {
     "极光下的舒缓助眠纯音乐，缓慢空灵、温暖柔和，没有人声。",
     "明亮有活力的电子纯音乐，乐观、清晰节奏，没有人声。"
 };
-enum { TASK_SYNC, TASK_CREATE, TASK_PLAY };
+enum { TASK_SYNC, TASK_CREATE };
 
 static const char *str(cJSON *j, const char *key)
 {
@@ -48,7 +51,9 @@ static bool valid_id(const char *id)
 }
 music_input_state_t music_input_state(void)
 {
-    taskENTER_CRITICAL(&mux); music_input_state_t copy = state; copy.busy = busy; taskEXIT_CRITICAL(&mux);
+    taskENTER_CRITICAL(&mux); music_input_state_t copy = state; copy.busy = busy;
+    audio_lease_t lease=playback_lease;taskEXIT_CRITICAL(&mux);
+    copy.playing=copy.playing&&audio_bus_is_current(lease);
     return copy;
 }
 static void set_status(const char *text)
@@ -132,12 +137,12 @@ static esp_err_t create_music(void)
     }
     return result == ESP_OK ? synchronize() : result;
 }
-static esp_err_t play_music(void)
+static esp_err_t play_music(playback_job_t *job)
 {
-    esp_err_t result = audio_bus_open_speaker();
-    if (result != ESP_OK) return result;
+    if(!audio_bus_is_current(job->lease))return ESP_ERR_INVALID_STATE;
+    esp_err_t result;
     esp_http_client_config_t config = {
-        .url = playback_url, .timeout_ms = 15000, .buffer_size = 2048, .disable_auto_redirect = true,
+        .url = job->url, .timeout_ms = 15000, .buffer_size = 2048, .disable_auto_redirect = true,
         .cert_pem = (const char *)device_ca_start,
         .client_cert_pem = (const char *)device_client_cert_start,
         .client_key_pem = (const char *)device_client_key_start,
@@ -152,26 +157,38 @@ static esp_err_t play_music(void)
         if (esp_http_client_get_status_code(client) != 200 || length <= 0 || length > MUSIC_MAX_PCM_BYTES || length % 2) result = ESP_FAIL;
         else {
             uint8_t buffer[2048]; int received = 0, carry = 0;
-            while (!stop_playback && (received = esp_http_client_read(client, (char *)buffer + carry, sizeof(buffer) - carry)) > 0) {
+            while (audio_bus_is_current(job->lease) && (received = esp_http_client_read(client, (char *)buffer + carry, sizeof(buffer) - carry)) > 0) {
                 int total = received + carry, aligned = total & ~1;
-                if (aligned && audio_bus_write(buffer, aligned) != ESP_OK) { result = ESP_FAIL; break; }
-                taskENTER_CRITICAL(&mux); state.written += aligned; taskEXIT_CRITICAL(&mux);
+                if (aligned && audio_bus_write(job->lease,buffer,aligned) != ESP_OK) { result = ESP_FAIL; break; }
+                taskENTER_CRITICAL(&mux);if(state.sequence==job->sequence)state.written += aligned;taskEXIT_CRITICAL(&mux);
                 carry = total & 1; if (carry) buffer[0] = buffer[aligned];
             }
-            if (!stop_playback && (received < 0 || carry || !esp_http_client_is_complete_data_received(client))) result = ESP_FAIL;
+            if (audio_bus_is_current(job->lease) && (received < 0 || carry || !esp_http_client_is_complete_data_received(client))) result = ESP_FAIL;
         }
     }
     esp_http_client_close(client); esp_http_client_cleanup(client);
     return result;
 }
+static void playback_worker(void *arg)
+{
+    playback_job_t *job=arg;
+    esp_err_t result=play_music(job);
+    bool interrupted=!audio_bus_is_current(job->lease);
+    audio_bus_release(job->lease);
+    taskENTER_CRITICAL(&mux);
+    if(state.sequence==job->sequence){
+        state.playing=false;
+        if(!busy)strlcpy(music_status,interrupted||result==ESP_OK?"MUSIC READY - TAP PLAY":"MUSIC PLAYBACK FAILED",sizeof(music_status));
+    }
+    playback_workers--;
+    taskEXIT_CRITICAL(&mux);
+    free(job);vTaskDeleteWithCaps(NULL);
+}
 static void worker(void *arg)
 {
     unsigned action = (unsigned)(uintptr_t)arg;
-    esp_err_t result = action == TASK_PLAY ? play_music() : action == TASK_CREATE ? create_music() : synchronize();
-    if (action == TASK_PLAY) {
-        audio_bus_release();
-        set_status(result == ESP_OK ? "MUSIC READY - TAP PLAY" : "MUSIC PLAYBACK FAILED");
-    } else if (result != ESP_OK) {
+    esp_err_t result = action == TASK_CREATE ? create_music() : synchronize();
+    if (result != ESP_OK) {
         set_status(action == TASK_CREATE ? "MUSIC CREATION FAILED" : "MUSIC SYNC FAILED");
         if (action == TASK_CREATE) notification_post("music", "音乐生成未完成，请查看网络及作品库", recording_station ? 11 : 10, NOTICE_FAILED);
     } else if (action == TASK_CREATE) {
@@ -179,7 +196,7 @@ static void worker(void *arg)
         if (ready) notification_post("music", "音乐已保存，点此播放", recording_station ? 11 : 10, NOTICE_DONE);
     }
     taskENTER_CRITICAL(&mux);
-    state.playing = false; busy = false;
+    busy = false;
     next_sync = esp_timer_get_time() + (result == ESP_OK ? 30000000 : 10000000);
     taskEXIT_CRITICAL(&mux);
     vTaskDeleteWithCaps(NULL);
@@ -187,14 +204,14 @@ static void worker(void *arg)
 static esp_err_t launch(unsigned action)
 {
     if (xTaskCreateWithCaps(worker, "music", 8192, (void *)(uintptr_t)action, 4, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) return ESP_OK;
-    taskENTER_CRITICAL(&mux); busy = false; state.playing = false; taskEXIT_CRITICAL(&mux);
+    taskENTER_CRITICAL(&mux); busy = false; taskEXIT_CRITICAL(&mux);
     set_status("MUSIC SYNC FAILED"); return ESP_ERR_NO_MEM;
 }
 void music_input_refresh(void)
 {
     if (voice_input_is_recording() || voice_input_is_processing()) return;
     taskENTER_CRITICAL(&mux);
-    bool run = !busy && !state.recording && esp_timer_get_time() >= next_sync;
+    bool run = !busy && !state.recording && !state.playing && esp_timer_get_time() >= next_sync;
     if (run) busy = true;
     taskEXIT_CRITICAL(&mux);
     if (run) launch(TASK_SYNC);
@@ -256,18 +273,22 @@ esp_err_t music_input_finish(void)
 esp_err_t music_input_play_artwork(const char *id)
 {
     if (!valid_id(id)) return ESP_ERR_INVALID_ARG;
-    if (!reserve()) return ESP_ERR_INVALID_STATE;
-    if (!audio_bus_try_acquire()) {
-        taskENTER_CRITICAL(&mux); busy = false; taskEXIT_CRITICAL(&mux);
-        return ESP_ERR_INVALID_STATE;
-    }
-    snprintf(playback_url, sizeof(playback_url), CLOCK_API_BASE "/v1/library?id=%s&part=data", id);
-    stop_playback = false;
-    taskENTER_CRITICAL(&mux); state.playing = true; state.written = 0; state.sequence++; taskEXIT_CRITICAL(&mux);
+    playback_job_t *job=calloc(1,sizeof(*job));if(!job)return ESP_ERR_NO_MEM;
+    taskENTER_CRITICAL(&mux);
+    /* Displaced HTTP workers close themselves; cap sockets during rapid taps. */
+    if(busy||state.recording||playback_workers>=3){taskEXIT_CRITICAL(&mux);free(job);return ESP_ERR_INVALID_STATE;}
+    playback_workers++;
+    job->lease=playback_lease=audio_bus_request();
+    state.playing=true;state.written=0;job->sequence=++state.sequence;
+    taskEXIT_CRITICAL(&mux);
+    snprintf(job->url,sizeof(job->url),CLOCK_API_BASE "/v1/library?id=%s&part=data",id);
     set_status("PLAYING MUSIC...");
-    esp_err_t result = launch(TASK_PLAY);
-    if (result != ESP_OK) audio_bus_release();
-    return result;
+    if(xTaskCreateWithCaps(playback_worker,"music_play",8192,job,4,NULL,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)==pdPASS)return ESP_OK;
+    audio_bus_release(job->lease);
+    taskENTER_CRITICAL(&mux);playback_workers--;
+    if(state.sequence==job->sequence){state.playing=false;if(!busy)strlcpy(music_status,"MUSIC PLAYBACK FAILED",sizeof(music_status));}
+    taskEXIT_CRITICAL(&mux);
+    free(job);return ESP_ERR_NO_MEM;
 }
 esp_err_t music_input_play_station(unsigned station)
 {
@@ -276,7 +297,12 @@ esp_err_t music_input_play_station(unsigned station)
     return copy.saved[station][0] ? music_input_play_artwork(copy.saved[station]) : ESP_ERR_NOT_FOUND;
 }
 esp_err_t music_input_play(void) { return music_input_play_station(0); }
-void music_input_stop(void) { stop_playback = true; }
+void music_input_stop(void)
+{
+    taskENTER_CRITICAL(&mux);audio_lease_t lease=playback_lease;state.playing=false;
+    if(!busy)strlcpy(music_status,"MUSIC READY - TAP PLAY",sizeof(music_status));
+    taskEXIT_CRITICAL(&mux);audio_bus_release(lease);
+}
 void music_input_set_volume(uint8_t volume) { audio_bus_set_volume(volume); }
 bool music_input_is_recording(void) { return music_input_state().recording; }
 const char *music_input_status(void)
