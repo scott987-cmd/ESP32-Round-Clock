@@ -70,6 +70,7 @@
 #define AXP2101_PKEY_SHORT_MASK BIT3
 #define WALLPAPER_PATH "/wallpaper/current.rgb565"
 #define WALLPAPER_TEMP_PATH "/wallpaper/current.tmp"
+#define WALLPAPER_BACKUP_PATH "/wallpaper/current.bak"
 #define WEATHER_RESPONSE_BYTES 2048
 #define WEATHER_REFRESH_MS (30 * 60 * 1000)
 #define WEATHER_RETRY_MS 60000
@@ -208,6 +209,7 @@ typedef struct {
 
 typedef struct {
     char signal_id[32];
+    char watch_id[32];
     char event_label[80];
     char event_time[48];
     char event_age[96];
@@ -221,6 +223,7 @@ typedef struct {
     time_t forecast_expires;
     time_t event_epoch;
     bool active;
+    bool watch;
     bool stale;
 } codex_reset_data_t;
 
@@ -620,10 +623,10 @@ static void apply_pending_codex_reset_locked(void)
     char previous_id[32];
     load_last_codex_reset_id(previous_id, sizeof(previous_id));
     bool first_signal = previous_id[0] == '\0';
-    bool changed = data->signal_id[0] != '\0' &&
-                   strcmp(previous_id, data->signal_id) != 0;
-    bool should_alert = changed && !first_signal && data->active && !data->stale;
-    if (changed && (first_signal || (!data->stale && data->remember_signal))) save_last_codex_reset_id(data->signal_id);
+    const char *notice_id = data->watch && data->watch_id[0] ? data->watch_id : data->signal_id;
+    bool changed = notice_id[0] != '\0' && strcmp(previous_id, notice_id) != 0;
+    bool should_alert = changed && !first_signal && (data->active || data->watch) && !data->stale;
+    if (changed && (first_signal || (!data->stale && data->remember_signal))) save_last_codex_reset_id(notice_id);
     lv_label_set_text(codex_reset_state_label, data->event_label);
     lv_label_set_text(codex_reset_time_label, data->event_time);
     lv_label_set_text(codex_reset_age_label, data->event_age);
@@ -642,15 +645,15 @@ static void apply_pending_codex_reset_locked(void)
     }
 
     if (should_alert) {
-        char notice_key[64]; snprintf(notice_key,sizeof(notice_key),"codex-reset:%s",data->signal_id);
-        notification_post(notice_key, "发现新的重置信息，点此查看摘要", APP_VIEW_CODEX_RESET, NOTICE_DONE);
+        char notice_key[64]; snprintf(notice_key,sizeof(notice_key),"codex-reset:%s",notice_id);
+        notification_post(notice_key, data->watch ? "发现近期重置提示（未确认），点此看概率" : "发现新的重置信息，点此查看摘要", APP_VIEW_CODEX_RESET, NOTICE_DONE);
         if (!screen_on) {
             bsp_display_backlight_on();
             bsp_display_brightness_set(display_brightness);
             screen_on = true;
         }
         show_view_locked(APP_VIEW_CODEX_RESET);
-        ESP_LOGW(TAG, "New Codex reset signal: %s", data->signal_id);
+        ESP_LOGW(TAG, "New Codex reset %s: %s", data->watch ? "watch" : "signal", notice_id);
     }
     free(data);
 }
@@ -1427,11 +1430,10 @@ static void app_gesture_event_cb(lv_event_t *event)
                                                 delta_x < 0 ? 1 : -1));
             return;
         }
-        if (current_app_view == APP_VIEW_CLOCK) {
-            show_wallpaper_locked(!showing_downloaded_wallpaper);
-            ESP_LOGI(TAG, "Touch tap: %s wallpaper",
-                     showing_downloaded_wallpaper ? "downloaded" : "built-in");
-        }
+        /* A clock tap used to toggle back to the bundled wallpaper.  That made
+         * a successfully generated wallpaper look as if it had disappeared.
+         * The clock now always presents the newest saved wallpaper; changing
+         * it belongs in Wallpaper Studio, not in an undocumented tap gesture. */
     }
 }
 
@@ -3735,6 +3737,11 @@ static bool read_cached_wallpaper(uint8_t *target)
 {
     FILE *file = fopen(WALLPAPER_PATH, "rb");
     if (file == NULL) {
+        /* A power interruption between the two SPIFFS renames leaves the last
+         * known-good image as the recovery copy. */
+        file = fopen(WALLPAPER_BACKUP_PATH, "rb");
+    }
+    if (file == NULL) {
         return false;
     }
     size_t bytes = fread(target, 1, WALLPAPER_BYTES, file);
@@ -3757,11 +3764,16 @@ static bool persist_wallpaper(const uint8_t *pixels)
         unlink(WALLPAPER_TEMP_PATH);
         return false;
     }
-    unlink(WALLPAPER_PATH);
+    /* SPIFFS cannot replace an existing filename atomically. Keep the old
+     * wallpaper recoverable until the new one has become the active file. */
+    unlink(WALLPAPER_BACKUP_PATH);
+    bool had_current = rename(WALLPAPER_PATH, WALLPAPER_BACKUP_PATH) == 0;
     if (rename(WALLPAPER_TEMP_PATH, WALLPAPER_PATH) != 0) {
         ESP_LOGE(TAG, "Cannot activate wallpaper: errno=%d", errno);
+        if (had_current) rename(WALLPAPER_BACKUP_PATH, WALLPAPER_PATH);
         return false;
     }
+    unlink(WALLPAPER_BACKUP_PATH);
     return true;
 }
 
@@ -4243,6 +4255,13 @@ static esp_err_t download_codex_reset(codex_reset_data_t *data)
     data->active = cJSON_IsTrue(active);
     data->stale = cJSON_IsTrue(stale);
     data->forecast_available = cJSON_IsTrue(available);
+    cJSON *watch = cJSON_GetObjectItemCaseSensitive(root, "watchEligible");
+    cJSON *watch_id = cJSON_GetObjectItemCaseSensitive(root, "watchId");
+    if (cJSON_IsTrue(watch) && cJSON_IsString(watch_id) &&
+        strlen(watch_id->valuestring) > 0 && strlen(watch_id->valuestring) < sizeof(data->watch_id)) {
+        data->watch = true;
+        strlcpy(data->watch_id, watch_id->valuestring, sizeof(data->watch_id));
+    }
     if (data->forecast_available) {
         cJSON *p24 = cJSON_GetObjectItemCaseSensitive(root, "probability24");
         cJSON *p48 = cJSON_GetObjectItemCaseSensitive(root, "probability48");

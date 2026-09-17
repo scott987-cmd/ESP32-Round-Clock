@@ -15,6 +15,12 @@ static const uint32_t fills[] = {
     0x8961E9, 0xF26A64, 0xC65AD9, 0x596DEB, 0x22B6A4,
     0x347BD1, 0xF1A52C, 0xEEA525, 0x329D9C, 0xDA7395, 0xEDAB73, 0x9B83D7, 0x57B899,
 };
+static const uint32_t gradients[] = {
+    0x5AA9FF, 0x64D7DE, 0xFF8EB9, 0xFFC36D, 0xA2AFBF,
+    0xB798FF, 0xFF9E98, 0xEC92F4, 0x91A6FF, 0x65D3B5,
+    0x69A8F4, 0xFFD26B, 0xFFD86B, 0x73C8B8, 0xF2A8C1,
+    0xFFC69C, 0xC9B0F6, 0x95D3AF,
+};
 
 typedef struct { lv_layer_t *layer; lv_area_t area; int size; } glyph_t;
 static void stroke(glyph_t *g, int x1, int y1, int x2, int y2, int width)
@@ -78,6 +84,10 @@ static void icon_draw(lv_event_t *e)
         stroke(&g,50,42,50,59,14); arc(&g,50,50,23,140,220,5);
         arc(&g,50,50,23,320,400,5); arc(&g,50,50,37,140,220,5);
         arc(&g,50,50,37,320,400,5); break;
+    case 9: /* Wallpaper: little landscape and a live sparkle. */
+        arc(&g,68,30,10,0,360,5);stroke(&g,20,74,42,47,5);stroke(&g,42,47,55,62,5);
+        stroke(&g,55,62,70,42,5);stroke(&g,70,42,82,74,5);stroke(&g,20,75,82,75,5);
+        stroke(&g,25,22,25,34,4);stroke(&g,19,28,31,28,4);break;
     case 10:
         stroke(&g,22,26,78,26,5); stroke(&g,22,26,22,66,5); stroke(&g,78,26,78,66,5);
         stroke(&g,22,66,78,66,5); stroke(&g,50,67,50,81,5); stroke(&g,36,82,64,82,5);
@@ -97,16 +107,27 @@ static void icon_draw(lv_event_t *e)
     case 15: /* Pet face with ears. */
         arc(&g,27,29,11,0,360,5);arc(&g,73,29,11,0,360,5);arc(&g,50,55,32,0,360,5);
         stroke(&g,38,49,38,53,5);stroke(&g,62,49,62,53,5);arc(&g,50,57,12,15,165,4);break;
+    case 16: /* Story book with a shooting-star bookmark. */
+        stroke(&g,50,24,20,20,5);stroke(&g,20,20,20,75,5);stroke(&g,20,75,50,82,5);
+        stroke(&g,50,24,80,20,5);stroke(&g,80,20,80,75,5);stroke(&g,80,75,50,82,5);
+        stroke(&g,50,24,50,82,5);stroke(&g,60,34,65,45,4);stroke(&g,65,45,76,46,4);
+        stroke(&g,76,46,68,53,4);stroke(&g,68,53,70,64,4);stroke(&g,70,64,60,58,4);break;
     case 17:
         stroke(&g,21,23,43,23,5);stroke(&g,43,23,43,77,5);stroke(&g,43,77,21,77,5);stroke(&g,21,77,21,23,5);
         stroke(&g,57,23,79,23,5);stroke(&g,79,23,79,77,5);stroke(&g,79,77,57,77,5);stroke(&g,57,77,57,23,5);
         arc(&g,32,50,6,0,360,4);arc(&g,68,50,6,0,360,4);break;
+    case 13: /* Picture word card: a letter plus a picture dot. */
+        stroke(&g,24,76,37,23,5);stroke(&g,37,23,50,76,5);stroke(&g,29,55,45,55,4);
+        arc(&g,66,42,12,0,360,5);stroke(&g,54,72,78,72,5);break;
+    case 18: /* Memory cards. */
+        stroke(&g,22,25,44,25,5);stroke(&g,44,25,44,68,5);stroke(&g,44,68,22,68,5);stroke(&g,22,68,22,25,5);
+        stroke(&g,56,33,78,33,5);stroke(&g,78,33,78,76,5);stroke(&g,78,76,56,76,5);stroke(&g,56,76,56,33,5);
+        arc(&g,33,46,5,0,360,4);arc(&g,67,55,5,0,360,4);break;
     case 14: /* Stacked photo frames. */
         stroke(&g,22,30,22,80,5);stroke(&g,22,80,73,80,5);
         stroke(&g,30,20,82,20,5);stroke(&g,82,20,82,70,5);stroke(&g,82,70,30,70,5);stroke(&g,30,70,30,20,5);
         arc(&g,64,36,5,0,360,5);stroke(&g,35,62,48,47,5);stroke(&g,48,47,72,62,5);break;
-    case 16:
-    case 13: /* Open picture book. */
+    case 19: /* Open picture book. */
         stroke(&g,50,26,19,20,5); stroke(&g,19,20,19,73,5);
         stroke(&g,19,73,50,81,5); stroke(&g,50,81,81,73,5);
         stroke(&g,81,73,81,20,5); stroke(&g,81,20,50,26,5);
@@ -133,10 +154,15 @@ void launcher_decorate_icon(lv_obj_t *object, unsigned index)
 {
     lv_obj_set_user_data(object, (void *)(uintptr_t)index);
     lv_obj_set_style_bg_color(object, lv_color_hex(fills[index % (sizeof(fills)/sizeof(fills[0]))]), 0);
-    lv_obj_set_style_bg_grad_dir(object, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_grad_color(object, lv_color_hex(gradients[index % (sizeof(gradients)/sizeof(gradients[0]))]), 0);
+    lv_obj_set_style_bg_grad_dir(object, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(object, 0, 0);
-    lv_obj_set_style_shadow_width(object, 0, 0);
+    lv_obj_set_style_border_width(object, 2, 0);
+    lv_obj_set_style_border_color(object, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(object, LV_OPA_50, 0);
+    lv_obj_set_style_shadow_width(object, 14, 0);
+    lv_obj_set_style_shadow_color(object, lv_color_hex(fills[index % (sizeof(fills)/sizeof(fills[0]))]), 0);
+    lv_obj_set_style_shadow_opa(object, LV_OPA_30, 0);
     lv_obj_set_style_radius(object, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_event_cb(object, icon_draw, LV_EVENT_DRAW_MAIN, NULL);
 }
@@ -147,6 +173,9 @@ static void refresh(void)
         unsigned i=(selected+app_count+slot-2)%app_count;
         lv_obj_set_user_data(tiles[slot], (void *)(uintptr_t)i);
         lv_obj_set_style_bg_color(tiles[slot], lv_color_hex(fills[i%(sizeof(fills)/sizeof(fills[0]))]), 0);
+        lv_obj_set_style_bg_grad_color(tiles[slot], lv_color_hex(gradients[i%(sizeof(gradients)/sizeof(gradients[0]))]), 0);
+        lv_obj_set_style_bg_grad_dir(tiles[slot], LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_shadow_color(tiles[slot], lv_color_hex(fills[i%(sizeof(fills)/sizeof(fills[0]))]), 0);
         lv_obj_invalidate(tiles[slot]);
     }
     lv_label_set_text(caption, app_names[selected]);
@@ -202,6 +231,11 @@ void launcher_create(lv_obj_t *parent,const lv_font_t *font,const char *const *n
         lv_obj_remove_style_all(tiles[slot]);
         lv_obj_set_style_radius(tiles[slot],LV_RADIUS_CIRCLE,0);
         lv_obj_set_style_bg_opa(tiles[slot],LV_OPA_COVER,0);
+        lv_obj_set_style_border_width(tiles[slot],2,0);
+        lv_obj_set_style_border_color(tiles[slot],lv_color_white(),0);
+        lv_obj_set_style_border_opa(tiles[slot],LV_OPA_50,0);
+        lv_obj_set_style_shadow_width(tiles[slot],14,0);
+        lv_obj_set_style_shadow_opa(tiles[slot],LV_OPA_30,0);
         lv_obj_add_event_cb(tiles[slot],icon_draw,LV_EVENT_DRAW_MAIN,NULL);
         lv_obj_remove_flag(tiles[slot],LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
     }

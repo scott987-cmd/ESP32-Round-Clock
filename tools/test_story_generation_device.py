@@ -12,7 +12,7 @@ try:
     if sys.argv[1]=='start':
         s=d.state();check('boot still defaults to clock',s['view']==1)
         check('downloaded book survives reboot',s['story_id']=='2c9447f36e4eb79bc0cc59ac42b59e40' and s['story_online'] and s['story_scene']==2)
-        previous=s['story_id'];d.view('story');d.tap(309,425);d.screenshot('bookshelf');d.tap(233,312)
+        previous=s['story_id'];d.view('story');d.screenshot('bookshelf');d.tap(233,312)
         s=d.state();check('device starts uniquely identified generation',len(s['story_job'])==32)
         d.view('pet');check('generation remains in background',d.state()['view']==19 and d.state()['story_job']==s['story_job'])
         (OUT/'pending.json').write_text(json.dumps(dict(job=s['story_job'],previous=previous),indent=2))

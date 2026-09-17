@@ -28,7 +28,8 @@ try:
             if v==value:tapcard(i)
     check('all pairs win once',d.state()['flip_matched']==63 and any('真棒' in x['text'] for x in d.state()['labels']));d.screenshot('flip-win')
     d.tap(295,430);check('new round resets board',d.state()['flip_matched']==0)
-    d.view('story');d.tap(309,425);d.tap(230,111);s=d.state()
+    # Story app opens its bookshelf first so AI generation is discoverable.
+    d.view('story');d.tap(230,126);s=d.state()
     check('built-in story starts offline',s['view']==20 and not s['story_online'] and s['story_scene']==0 and glyphs());d.screenshot('story-first')
     deadline=time.monotonic()+20
     while time.monotonic()<deadline:

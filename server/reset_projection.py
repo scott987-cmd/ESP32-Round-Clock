@@ -29,6 +29,20 @@ def local_time(value):
 def percent(value):
     return value if type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100 else None
 
+def recent_tease(feed, now):
+    """Return a fresh, source-classified hint; never infer one from wording."""
+    for post in feed.get('tweets', []) if isinstance(feed.get('tweets'), list) else []:
+        if not isinstance(post, dict) or not fresh(post.get('at'), now):
+            continue
+        tease = post.get('tease_classification')
+        if not (isinstance(tease, dict) and tease.get('status') == 'ok' and
+                tease.get('teasing') is True):
+            continue
+        ident, text = post.get('id'), post.get('text')
+        if isinstance(ident, str) and isinstance(text, str) and text.strip():
+            return ident[:31], text.strip().replace('\n', ' ')[:120], post.get('at')
+    return '', '', ''
+
 def project(feed, forecast, now=None):
     now = datetime.now(timezone.utc).timestamp() if now is None else now
     feed = feed if isinstance(feed, dict) else {}
@@ -77,10 +91,14 @@ def project(feed, forecast, now=None):
                 lo, hi = bounds.get('lower'), bounds.get('upper')
                 if type(lo) in (int,float) and type(hi) in (int,float) and 0 <= lo <= hi <= 1:
                     lines.append(f'{label}：{int(lo*100+0.5)}% - {int(hi*100+0.5)}%')
+        lines.append(f'未来 24 小时：{p24}% · 48 小时：{p48}%')
     lines.append('预测更新（北京时间）\n' + local_time(forecast.get('updated_at')))
     context = forecast.get('context_copy')
     if isinstance(context, dict) and isinstance(context.get('zh'), str):
         lines.append(context['zh'][:100])
+    wait_copy = forecast.get('wait_copy')
+    if isinstance(wait_copy, dict) and isinstance(wait_copy.get('zh'), str):
+        lines.append(wait_copy['zh'][:180])
     if forecast.get('official_signal') is None:
         lines.append('网站未给出官方重置窗口。')
     else:
@@ -90,12 +108,16 @@ def project(feed, forecast, now=None):
     lines.append('消息发布（北京时间）\n' + local_time(announced))
     summary = signal.get('summary')
     sid = signal.get('tweet_id')
+    watch_id, watch_summary, watch_at = recent_tease(feed, now)
+    watch = bool(watch_id and source_fresh and forecast_fresh)
+    if watch:
+        lines.insert(0, '近期提示（未确认）：' + watch_summary)
     return {
         'schemaVersion':2, 'fetchedAt':feed.get('fetched_at'), 'stale':not source_fresh,
         'active':eligible, 'alertEligible':eligible,
         # Do not consume an unconfirmed new signal: it may be confirmed on a
         # later poll, after a partial source failure or an upcoming announcement.
-        'rememberSignal':source_fresh and (eligible or (signal_epoch is not None and now-signal_epoch > MAX_ALERT_AGE)),
+        'rememberSignal':source_fresh and (eligible or watch or (signal_epoch is not None and now-signal_epoch > MAX_ALERT_AGE)),
         'signalId':sid[:31] if isinstance(sid,str) else '',
         'announcedAt':announced, 'summary':summary[:120] if isinstance(summary,str) else '',
         'analysis':'历史消息，不代表刚刚发生重置。' if not recent else '社区信号，请到原站和个人用量页核实。',
@@ -107,4 +129,8 @@ def project(feed, forecast, now=None):
         'forecastExpiresAt':int(stamp(forecast.get('updated_at'))+MAX_SOURCE_AGE) if forecast_fresh else 0,
         'details':'\n\n'.join(lines),
         'updateLabel':'来源更新 '+local_time(feed.get('fetched_at')) if source_fresh else '来源过期 · 不触发提醒',
+        # Optional schema-2 extension: older firmwares ignore it; newer ones
+        # can announce a current classified hint without calling it a reset.
+        'watchEligible':watch, 'watchId':watch_id, 'watchSummary':watch_summary,
+        'watchTime':local_time(watch_at) if watch else '',
     }

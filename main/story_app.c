@@ -271,9 +271,15 @@ void story_app_set_active(bool value)
     left=button(view,"",67,346,160,1);right=button(view,"",239,346,160,2);
     button(view,"桌面",119,403,72,0);play_button=button(view,"朗读",197,403,72,3);button(view,"书架",275,403,72,4);
     menu=lv_obj_create(view);lv_obj_remove_style_all(menu);lv_obj_set_size(menu,466,466);lv_obj_set_style_bg_color(menu,lv_color_hex(0xFAF7FF),0);lv_obj_set_style_bg_opa(menu,255,0);lv_obj_remove_flag(menu,LV_OBJ_FLAG_SCROLLABLE);
-    label(menu,"我的故事书",83,35,300,title_font);button(menu,"内置：小猫找星星",90,90,286,6);button(menu,"最近下载的故事",90,142,286,7);
-    label(menu,"家长创作 · 每日最多八次",63,201,340,body_font);button(menu,"分享与友谊",110,238,246,10);button(menu,"观察大自然",110,290,246,11);button(menu,"勇敢试一试",110,342,246,12);button(menu,"返回",178,404,110,5);
-    lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);autoplay=true;render();
+    label(menu,"我的故事书",83,28,300,title_font);
+    label(menu,"选一个主题，立即让 AI 写故事并配音",55,70,356,body_font);
+    button(menu,"内置：小猫找星星",90,105,286,6);button(menu,"最近下载的故事",90,155,286,7);
+    label(menu,"AI 生成新故事 · 每日最多八次",63,215,340,body_font);
+    button(menu,"生成：分享与友谊",110,250,246,10);button(menu,"生成：观察大自然",110,300,246,11);button(menu,"生成：勇敢试一试",110,350,246,12);button(menu,"返回故事",178,404,110,5);
+    /* This is the app's first screen, rather than a hidden second-level
+     * menu.  A parent can now see the generate actions without guessing that
+     * the small bookshelf button is an entry point. */
+    autoplay=false;render();
 }
 void story_app_debug(cJSON *root)
 {
