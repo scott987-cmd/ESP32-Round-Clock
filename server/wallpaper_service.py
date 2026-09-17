@@ -34,6 +34,8 @@ from companion_apps import agent_snapshot, store_boards, create_note, list_notes
 import avatar_service
 import artwork_library
 import story_service
+import pet_service
+import reset_insights
 from reset_projection import project as project_reset
 from concurrent.futures import ThreadPoolExecutor
 
@@ -440,7 +442,11 @@ def fetch_codex_reset() -> dict[str, object]:
             feed, forecast=first.result(), second.result()
         if not feed and not forecast:
             raise ValueError("reset sources unavailable")
-        result = project_reset(feed, forecast)
+        # Strip any similarly named upstream field: only our bounded classifier
+        # may write device_interpretation. Public data cannot grant itself trust.
+        for post in feed.get('tweets',[]) if isinstance(feed.get('tweets'),list) else []:
+            if isinstance(post,dict):post.pop('device_interpretation',None)
+        result = project_reset(reset_insights.enrich(feed), forecast)
         # MiniMax only interprets a genuinely recent message, never invents odds.
         if result['alertEligible']:
             cached_analysis=load_reset_analysis(result['signalId'])
@@ -450,6 +456,7 @@ def fetch_codex_reset() -> dict[str, object]:
                 result['details']+='\n\n消息解读\n'+cached_analysis.replace('MiniMax 判断:','')[:100]
             else:
                 threading.Thread(target=analyze_codex_reset,args=(result['signalId'],result['summary'],result['kind'],True,False),daemon=True).start()
+        result['details']=result['details'].encode()[:1500].decode('utf-8',errors='ignore')
         codex_reset_cache = result
         codex_reset_cache_time = now
         return result
@@ -725,6 +732,22 @@ class WallpaperHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == '/v1/pet':
+            if not self.authorized():self.send_error(HTTPStatus.UNAUTHORIZED);return
+            try:
+                query=urllib.parse.parse_qs(parsed.query)
+                ident=query.get('id',[''])[0]
+                if query.get('audio')==['1']:
+                    payload=pet_service.audio(ident)
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-Type','application/octet-stream')
+                    self.send_header('Content-Length',str(len(payload)))
+                    self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(payload)
+                else:self.send_json(HTTPStatus.OK,pet_service.job(ident))
+            except (ValueError,TypeError):self.send_error(HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:self.send_error(HTTPStatus.NOT_FOUND)
+            except OSError:self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)
+            return
         if parsed.path == '/v1/stories':
             if not self.authorized():self.send_error(HTTPStatus.UNAUTHORIZED);return
             try:
@@ -917,6 +940,23 @@ class WallpaperHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == '/v1/pet':
+            if not self.authorized():self.send_error(HTTPStatus.UNAUTHORIZED);return
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if self.headers.get('Content-Type','').split(';',1)[0].strip().lower()!='application/json':
+                    self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE);return
+                if not 0<length<=2048:raise ValueError('invalid size')
+                self.connection.settimeout(20)
+                raw=self.rfile.read(length)
+                if len(raw)!=length:raise ValueError('incomplete request')
+                value=json.loads(raw)
+                if not isinstance(value,dict):raise ValueError('invalid body')
+                self.send_json(HTTPStatus.OK,pet_service.start(value.get('requestId'),value.get('text')))
+            except (ValueError,TypeError):self.send_error(HTTPStatus.BAD_REQUEST)
+            except BlockingIOError:self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
+            except OSError:self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)
+            return
         if parsed.path == '/v1/stories':
             if not self.authorized():self.send_error(HTTPStatus.UNAUTHORIZED);return
             try:
@@ -1139,6 +1179,7 @@ def serve(host: str, port: int) -> None:
         install_default()
     artwork_library.migrate_current(STATE_DIR)
     story_service.recover()
+    pet_service.recover()
     server = BoundedThreadingHTTPServer((host, port), WallpaperHandler)
     print(f"serving wallpaper on {host}:{port}", flush=True)
     server.serve_forever()

@@ -3,9 +3,11 @@ import json
 import time
 from pathlib import Path
 from device_ui_test import Device
+from device_api_client import request
 
 out = Path('artifacts/reset-review')
-api = json.loads((out / 'api-after.json').read_text())
+out.mkdir(parents=True,exist_ok=True)
+api = json.loads(request('/v1/codex-reset'))
 d = Device('/dev/cu.usbmodem21201', out)
 checks = []
 

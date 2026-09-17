@@ -22,6 +22,7 @@
 #include "wifi_setup.h"
 #include "companion_apps.h"
 #include "notification_center.h"
+#include "reset_notice_state.h"
 #include "star_game.h"
 #include "english_app.h"
 #include "library_app.h"
@@ -555,24 +556,24 @@ static void apply_pending_quota_locked(void)
     }
 }
 
-static void load_last_codex_reset_id(char *buffer, size_t size)
+static void load_last_codex_reset_id(const char *key, char *buffer, size_t size)
 {
     buffer[0] = '\0';
     nvs_handle_t handle;
     if (nvs_open("alerts", NVS_READONLY, &handle) == ESP_OK) {
         size_t required = size;
-        if (nvs_get_str(handle, "codex_reset", buffer, &required) != ESP_OK) {
+        if (nvs_get_str(handle, key, buffer, &required) != ESP_OK) {
             buffer[0] = '\0';
         }
         nvs_close(handle);
     }
 }
 
-static void save_last_codex_reset_id(const char *signal_id)
+static void save_last_codex_reset_id(const char *key, const char *signal_id)
 {
     nvs_handle_t handle;
     if (nvs_open("alerts", NVS_READWRITE, &handle) == ESP_OK) {
-        nvs_set_str(handle, "codex_reset", signal_id);
+        nvs_set_str(handle, key, signal_id);
         nvs_commit(handle);
         nvs_close(handle);
     }
@@ -621,12 +622,15 @@ static void apply_pending_codex_reset_locked(void)
     taskEXIT_CRITICAL(&codex_reset_data_mux);
 
     char previous_id[32];
-    load_last_codex_reset_id(previous_id, sizeof(previous_id));
-    bool first_signal = previous_id[0] == '\0';
-    const char *notice_id = data->watch && data->watch_id[0] ? data->watch_id : data->signal_id;
-    bool changed = notice_id[0] != '\0' && strcmp(previous_id, notice_id) != 0;
-    bool should_alert = changed && !first_signal && (data->active || data->watch) && !data->stale;
-    if (changed && (first_signal || (!data->stale && data->remember_signal))) save_last_codex_reset_id(notice_id);
+    load_last_codex_reset_id("codex_reset", previous_id, sizeof(previous_id));
+    char previous_watch[32];load_last_codex_reset_id("codex_watch",previous_watch,sizeof(previous_watch));
+    reset_notice_decision_t decision=reset_notice_decide(data->active,data->watch,data->stale,data->remember_signal,
+        data->signal_id,data->watch_id,previous_id,previous_watch);
+    if(decision.remember_reset)save_last_codex_reset_id("codex_reset",data->signal_id);
+    if(decision.remember_watch)save_last_codex_reset_id("codex_watch",data->watch_id);
+    bool reset_alert=decision.reset;
+    bool should_alert=decision.reset||decision.watch;
+    const char *notice_id=reset_alert?data->signal_id:data->watch_id;
     lv_label_set_text(codex_reset_state_label, data->event_label);
     lv_label_set_text(codex_reset_time_label, data->event_time);
     lv_label_set_text(codex_reset_age_label, data->event_age);
@@ -645,8 +649,8 @@ static void apply_pending_codex_reset_locked(void)
     }
 
     if (should_alert) {
-        char notice_key[64]; snprintf(notice_key,sizeof(notice_key),"codex-reset:%s",notice_id);
-        notification_post(notice_key, data->watch ? "发现近期重置提示（未确认），点此看概率" : "发现新的重置信息，点此查看摘要", APP_VIEW_CODEX_RESET, NOTICE_DONE);
+        char notice_key[64]; snprintf(notice_key,sizeof(notice_key),"codex-%s:%s",reset_alert?"reset":"watch",notice_id);
+        notification_post(notice_key, !reset_alert ? "发现近期重置提示（未确认），点此看概率" : "发现新的重置信息，点此查看摘要", APP_VIEW_CODEX_RESET, NOTICE_DONE);
         if (!screen_on) {
             bsp_display_backlight_on();
             bsp_display_brightness_set(display_brightness);
@@ -1234,7 +1238,7 @@ esp_err_t ui_debug_state(char *buffer, size_t capacity)
     cJSON_AddNumberToObject(root, "free_internal", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "reset_sync_count", codex_reset_sync_count);
     char reset_cursor[32];
-    load_last_codex_reset_id(reset_cursor, sizeof(reset_cursor));
+    load_last_codex_reset_id("codex_reset", reset_cursor, sizeof(reset_cursor));
     cJSON_AddStringToObject(root, "reset_cursor", reset_cursor);
     cJSON_AddNumberToObject(root, "minimum_internal", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "selected", launcher_selected());
@@ -1338,7 +1342,7 @@ esp_err_t ui_debug_scroll_quota(bool to_bottom)
 
 esp_err_t ui_debug_arm_codex_reset_alert(void)
 {
-    save_last_codex_reset_id("usb-test-previous-signal");
+    save_last_codex_reset_id("codex_reset", "usb-test-previous-signal");
     codex_reset_refresh_requested = true;
     return ESP_OK;
 }
@@ -1391,7 +1395,7 @@ static void launcher_overview(void)
 
 static void companion_home(void) { show_view_locked(APP_VIEW_DESKTOP); }
 static void open_library_story(void) {show_view_locked(APP_VIEW_STORY);}
-static void notification_open_app(unsigned view) { show_view_locked((app_view_t)view); }
+static void notification_open_app(unsigned view) { show_view_locked((app_view_t)view); if(view==APP_VIEW_STORY)story_app_resume(); }
 
 static void app_gesture_event_cb(lv_event_t *event)
 {
@@ -2348,7 +2352,7 @@ static void create_settings(lv_obj_t *screen)
     lv_label_set_text(title, localized("SETTINGS", "设置"));
     lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xE7F8FF), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
 
     settings_notice_label = lv_label_create(settings_view);
     lv_label_set_text(settings_notice_label, localized("TAP A ROW TO CHANGE", "点击更改"));
@@ -2358,7 +2362,7 @@ static void create_settings(lv_obj_t *screen)
     lv_obj_set_style_text_font(settings_notice_label, localized_font(&lv_font_montserrat_12), 0);
     lv_obj_set_style_text_color(settings_notice_label, lv_color_hex(0x9DE9FF), 0);
     lv_obj_set_style_text_font(settings_notice_label, &round_clock_cn_16, 0);
-    lv_obj_align(settings_notice_label, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_align(settings_notice_label, LV_ALIGN_TOP_MID, 0, 64);
 
     settings_list = lv_obj_create(settings_view);
     lv_obj_set_size(settings_list, 374, 298);
@@ -2757,7 +2761,7 @@ static void create_quota(lv_obj_t *screen)
     lv_label_set_text(title, localized("TOKEN USAGE", "用量"));
     lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xDDEBFF), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
 
     quota_total_label = lv_label_create(quota_view);
     lv_label_set_text(quota_total_label, "--");
@@ -2975,7 +2979,7 @@ static void create_app_overview(lv_obj_t *screen)
     lv_label_set_text(title, localized("ALL APPS", "所有应用"));
     lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xF5E7D8), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
 
     app_overview_grid = lv_obj_create(app_overview_view);
     lv_obj_set_size(app_overview_grid, 374, 320);
@@ -3485,7 +3489,7 @@ static void create_avatar(lv_obj_t *screen)
     lv_label_set_text(title, localized("MY AVATAR", "互动头像"));
     lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFE7FA), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
 
     avatar_status_label = lv_label_create(avatar_view);
     lv_label_set_text(avatar_status_label,
@@ -3493,12 +3497,12 @@ static void create_avatar(lv_obj_t *screen)
     lv_obj_set_style_text_font(avatar_status_label,
                                localized_font(&lv_font_montserrat_14), 0);
     lv_obj_set_style_text_color(avatar_status_label, lv_color_hex(0xA9EFFF), 0);
-    lv_obj_align(avatar_status_label, LV_ALIGN_TOP_MID, 0, 55);
+    lv_obj_align(avatar_status_label, LV_ALIGN_TOP_MID, 0, 63);
     avatar_sync_label=lv_label_create(avatar_view);
     lv_label_set_text(avatar_sync_label,avatar_store_sync_status());
     lv_obj_set_style_text_font(avatar_sync_label,&round_clock_cn_16,0);
     lv_obj_set_style_text_color(avatar_sync_label,lv_color_hex(0x687587),0);
-    lv_obj_align(avatar_sync_label,LV_ALIGN_TOP_MID,0,80);
+    lv_obj_align(avatar_sync_label,LV_ALIGN_TOP_MID,0,86);
 
     lv_obj_t *halo = lv_obj_create(avatar_view);
     lv_obj_set_size(halo, 280, 280);

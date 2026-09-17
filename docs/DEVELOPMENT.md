@@ -74,3 +74,41 @@ swift test -c release --package-path macos/RoundTextBridge
 - 不要把整屏双缓冲强行放入内部 RAM；先测量驱动的 DMA 要求和最大连续块。
 - 不要在没有幂等请求 ID 的情况下自动重试付费生成。
 - 不要把 `sdkconfig`、证书、运行数据、构建目录或真机截图提交到 Git。
+
+## 宠物对话与重置解读
+
+宠物使用 `voice_input` 采集设备麦克风，经现有 `/v1/transcribe` 识别后，由
+`pet_dialogue` 请求 `/v1/pet` 的异步任务。服务端生成短句与 16 kHz 单声道
+PCM；设备验证长度和 SHA-256，回到宠物页面才播放。点击回复可重听。
+等待期间可切换应用；此轮对话不保证设备断电后恢复。服务端不保存原始识别文本，
+只保存请求哈希、回复和音频；启动或新建对话时清理超过两天的记录，每日上限 100 次。
+
+新增任务不要阻塞 LVGL，也不要从网络回调直接修改控件。音频使用 `audio_bus`
+仲裁；PCM 在播放器结束前不得释放或改写。生成接口用随机请求 ID 去重，
+网络超时不自动重新提交付费请求。
+
+重置雷达中，来源采集时间最多允许滞后 30 分钟，预告消息本身最多保留 24 小时；
+不能把两者混用。`reset_insights` 对最近公开消息做缓存语义分类，
+`reset_projection` 保留时间、来源概率和非官方提示。模型不能生成概率，
+也不能凭自己的判断把预告升级成“已经重置”。设备分别保存预告与确认消息的游标。
+
+定向回归（USB 调试入口仅在开发固件中启用）：
+
+```bash
+cc -Wall -Wextra -Werror -I main tools/test_reset_notice_state.c -o /tmp/test-reset-notices
+/tmp/test-reset-notices
+.venv/bin/python tools/test_pet_dialogue_device.py
+.venv/bin/python tools/test_pet_dialogue_device.py --acoustic
+.venv/bin/python tools/test_story_entry_device.py
+.venv/bin/python tools/test_reset_device.py
+```
+
+`--acoustic` 会由 Mac 播放固定中文测试句，由圆屏麦克风收音。它不修改网络或
+系统音量；静音、耳机输出或设备太远时应报告条件不满足，不能把文本注入测试当作麦克风测试。
+故事回归使用已有缓存作品，不创建新故事；重置回归只读取真实来源，不伪造线上预警。
+
+桌面性能排查先测量再改动。LVGL 软件绘制中，连续改变圆形图标大小会使模糊阴影
+反复计算；本项目保留渐变与轮廓，避免在滑动卡片上使用实时模糊阴影。
+`device_ui_benchmark.py` 的数字是渲染加提交刷新耗时，不等于面板刷新率。
+参考：[LVGL 软件阴影缓存](https://lvgl.io/docs/open/9.5/API/lv_conf_h)、
+[MiniMax 同步语音合成](https://platform.minimax.io/docs/api-reference/speech-t2a-http)。

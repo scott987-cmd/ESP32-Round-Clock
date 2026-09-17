@@ -9,5 +9,5 @@ idf_component_register(
         "certs/device-client.key"
 )
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
-target_sources(${COMPONENT_LIB} PRIVATE "content_assets.c" "kids_apps.c" "story_app.c")
+target_sources(${COMPONENT_LIB} PRIVATE "content_assets.c" "kids_apps.c" "story_app.c" "pet_dialogue.c")
 esptool_py_flash_to_partition(flash "content" "${CMAKE_CURRENT_SOURCE_DIR}/assets/content.bin")

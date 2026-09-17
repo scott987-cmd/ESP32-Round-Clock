@@ -64,6 +64,30 @@ class ResetProjectionTests(unittest.TestCase):
         }]
         self.assertFalse(self.project()['watchEligible'])
 
+    def test_hint_age_is_not_the_poll_freshness_window(self):
+        self.feed['tweets']=[{'id':'hint','at':'2026-09-15T12:00:00Z','text':'A reset is coming.',
+                             'tease_classification':{'status':'ok','teasing':True}}]
+        self.assertTrue(self.project()['watchEligible'])
+        self.feed['tweets'][0]['at']='2026-09-14T12:00:00Z'
+        self.assertFalse(self.project()['watchEligible'])
+
+    def test_later_completed_reset_invalidates_prior_hint(self):
+        self.feed['tweets']=[{'id':'hint','at':'2026-09-16T00:15:00Z','text':'Coming soon.',
+                             'device_interpretation':{'verdict':'upcoming','summary':'即将重置，时间未定'}}]
+        self.assertTrue(self.project()['watchEligible'])
+        self.forecast['last_reset_at']='2026-09-16T00:30:00Z'
+        self.assertFalse(self.project()['watchEligible'])
+
+    def test_newest_hint_and_utf8_budget(self):
+        self.feed['tweets']=[{'id':'older','at':'2026-09-16T00:10:00Z','text':'older','tease_classification':{'status':'ok','teasing':True}},
+                            {'id':'newer','at':'2026-09-16T00:20:00Z','text':'newer','device_interpretation':{'verdict':'upcoming','summary':'可能重置，请等待确认'}}]
+        self.forecast['context_copy']={'zh':'字'*1000};self.forecast['wait_copy']={'zh':'字'*1000}
+        result=self.project()
+        self.assertEqual(result['watchId'],'newer');self.assertLess(len(result['details'].encode()),1600)
+        self.assertIn('2026-09-16 08:20',result['details'])
+        self.feed['tweets'][1]['device_interpretation']['verdict']='irrelevant'
+        self.assertEqual(self.project()['watchId'],'older')
+
     def test_recent_requires_fresh_source_and_forecast(self):
         self.feed['signal']['at'] = '2026-09-16T00:00:00Z'
         self.feed['stale'] = True

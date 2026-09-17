@@ -3,6 +3,7 @@
 #include "content_assets.h"
 #include "audio_bus.h"
 #include "voice_input.h"
+#include "pet_dialogue.h"
 #include "esp_heap_caps.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
@@ -21,56 +22,23 @@ static int active=-1,first=-1,second=-1;
 static uint32_t hide_at,smile_until,frame;
 static uint8_t *pixels[3];
 static lv_image_dsc_t images[3];
-static portMUX_TYPE pet_voice_mux=portMUX_INITIALIZER_UNLOCKED;
-static bool pet_voice_pending,pet_voice_waiting;
-static uint8_t pet_voice_action;
-static char pet_voice_reply[128],pet_voice_heard[96];
-/* A short friendly chirp confirms that a spoken request was understood even
- * while the full reply remains readable on the small circular display. */
-static int16_t pet_chirp[2400];
+static unsigned pet_applied_sequence,pet_spoken_sequence;
+static int pet_displayed_phase=-1;
+static unsigned pet_displayed_sequence;
 static void save(const char *key,const void *data,size_t bytes);
-
-static void pet_make_chirp(void)
-{
-    for(size_t i=0;i<sizeof(pet_chirp)/sizeof(pet_chirp[0]);i++) {
-        unsigned phase=(unsigned)(i%160);int value=phase<80?(int)phase:160-(int)phase;
-        pet_chirp[i]=(int16_t)((value-40)*120);
-    }
-}
-static void pet_voice_ready(const char *text,void *context)
-{
-    (void)context;char reply[sizeof(pet_voice_reply)]="我没有听清，再靠近一点说吧。";uint8_t action=0;
-    if(text&&text[0]) {
-        if(strstr(text,"点心")||strstr(text,"吃")||strstr(text,"饿")){strlcpy(reply,"啊呜，点心真香！谢谢你。",sizeof(reply));action=2;}
-        else if(strstr(text,"晚安")||strstr(text,"睡觉")){strlcpy(reply,"晚安！我会做甜甜的梦。",sizeof(reply));action=3;}
-        else if(strstr(text,"醒")||strstr(text,"起床")){strlcpy(reply,"我醒啦！我们一起玩吧。",sizeof(reply));action=4;}
-        else if(strstr(text,"摸")||strstr(text,"抱")||strstr(text,"喜欢")||strstr(text,"爱你")){strlcpy(reply,"嘿嘿，我也喜欢你！",sizeof(reply));action=1;}
-        else if(strstr(text,"故事")){strlcpy(reply,"想听故事吗？去互动故事屋吧！",sizeof(reply));}
-        else if(strstr(text,"你好")||strstr(text,"早上好")||strstr(text,"团团")){strlcpy(reply,"你好呀！我是团团，今天也想陪你玩。",sizeof(reply));}
-        else snprintf(reply,sizeof(reply),"我听到了：%.54s",text);
-    }
-    taskENTER_CRITICAL(&pet_voice_mux);
-    strlcpy(pet_voice_heard,text?text:"",sizeof(pet_voice_heard));strlcpy(pet_voice_reply,reply,sizeof(pet_voice_reply));
-    pet_voice_action=action;pet_voice_pending=true;pet_voice_waiting=false;
-    taskEXIT_CRITICAL(&pet_voice_mux);
-}
 static void pet_apply_voice(void)
 {
-    char reply[sizeof(pet_voice_reply)],heard[sizeof(pet_voice_heard)];uint8_t action;
-    taskENTER_CRITICAL(&pet_voice_mux);
-    if(!pet_voice_pending){taskEXIT_CRITICAL(&pet_voice_mux);return;}
-    strlcpy(reply,pet_voice_reply,sizeof(reply));strlcpy(heard,pet_voice_heard,sizeof(heard));action=pet_voice_action;pet_voice_pending=false;
-    taskEXIT_CRITICAL(&pet_voice_mux);
-    if(action==1){pet.pats++;pet.asleep=0;} else if(action==2){pet.meals++;pet.asleep=0;} else if(action==3)pet.asleep=1; else if(action==4)pet.asleep=0;
-    if(action)save("pet",&pet,sizeof(pet));
-    if(message){
-        char shown[180];size_t clip=strnlen(heard,54);
-        while(clip&&((unsigned char)heard[clip]&0xc0)==0x80)clip--;
-        if(heard[0])snprintf(shown,sizeof(shown),"你说：%.*s\n团团：%s",(int)clip,heard,reply);
-        else snprintf(shown,sizeof(shown),"团团：%s",reply);
-        lv_label_set_text(message,shown);
+    pet_dialogue_state_t s=pet_dialogue_state();
+    if(s.phase==PET_READY&&s.sequence!=pet_applied_sequence){
+        if(s.action==1){pet.pats++;pet.asleep=0;}else if(s.action==2){pet.meals++;pet.asleep=0;}else if(s.action==3)pet.asleep=1;else if(s.action==4)pet.asleep=0;
+        if(s.action)save("pet",&pet,sizeof(pet));
+        pet_applied_sequence=s.sequence;smile_until=lv_tick_get()+2200;
     }
-    smile_until=lv_tick_get()+2200;if(audio_bus_volume()>0)audio_local_play((const uint8_t *)pet_chirp,sizeof(pet_chirp));
+    if(active!=0)return;
+    if(s.phase==PET_READY&&s.sequence!=pet_spoken_sequence&&pet_dialogue_play()==ESP_OK)pet_spoken_sequence=s.sequence;
+    const char *text=s.phase==PET_LISTENING?"正在听…再点一次结束":s.phase==PET_THINKING?"团团在想怎么回答，可以先去玩别的":s.reply;
+    if(*text&&(pet_displayed_phase!=(int)s.phase||pet_displayed_sequence!=s.sequence))lv_label_set_text(message,text);
+    pet_displayed_phase=s.phase;pet_displayed_sequence=s.sequence;
 }
 static void save(const char *key,const void *data,size_t bytes)
 {
@@ -131,9 +99,14 @@ static void action(lv_event_t *e)
         else if(a==2){pet.meals++;pet.asleep=0;lv_label_set_text(message,"啊呜，谢谢你的美味点心！");}
         else if(a==3){pet.asleep=!pet.asleep;lv_label_set_text(message,pet.asleep?"晚安，点一下就能叫醒我":"早上好，一起玩吧！");}
         else if(a==4){
-            esp_err_t result=pet_voice_waiting?voice_input_finish():voice_input_start_with_callback(pet_voice_ready,NULL);
-            if(result==ESP_OK){pet_voice_waiting=!pet_voice_waiting;lv_label_set_text(message,pet_voice_waiting?"团团正在听…再点一次结束":"正在识别你说的话…");}
-            else lv_label_set_text(message,"声音正忙，请等一会儿再和团团说话。");
+            pet_dialogue_state_t s=pet_dialogue_state();
+            if(s.phase==PET_LISTENING)pet_dialogue_finish();
+            else if(s.phase!=PET_THINKING&&pet_dialogue_start()!=ESP_OK)lv_label_set_text(message,"声音正忙，请稍后再说");
+            return;
+        }
+        else if(a==5){
+            pet_dialogue_state_t s=pet_dialogue_state();
+            if(s.phase==PET_READY){pet_dialogue_leave();pet_spoken_sequence=s.sequence-1;}
             return;
         }
         smile_until=lv_tick_get()+2000;save("pet",&pet,sizeof(pet));
@@ -155,14 +128,17 @@ static void action(lv_event_t *e)
 static void tick(lv_timer_t *timer)
 {
     (void)timer;
+    pet_apply_voice();
     if(active==0){
-        pet_apply_voice();
         frame++;bool blink=pet.asleep||(frame%32==0);int height=blink?4:16;
         for(int i=0;i<2;i++){lv_obj_set_height(eyes[i],height);lv_obj_set_y(eyes[i],68+(16-height)/2);}
-        lv_obj_set_y(face,140+((lv_tick_get()<smile_until)?(frame%4<2?-4:0):0));
-        if(pet_voice_label)lv_label_set_text(pet_voice_label,pet_voice_waiting?"结束聆听":"和团团说话");
-        uint8_t level=voice_input_is_recording()?voice_input_level():0;
-        for(int i=0;i<5;i++)if(pet_wave[i])lv_obj_set_height(pet_wave[i],pet_voice_waiting?8+(level*(i%2?52:36))/100:7+(i%2)*4);
+        lv_obj_set_y(face,112+((lv_tick_get()<smile_until)?(frame%4<2?-4:0):0));
+        pet_dialogue_state_t s=pet_dialogue_state();
+        const char *caption=s.phase==PET_LISTENING?"结束聆听":s.phase==PET_THINKING?"正在回答…":"和团团说话";
+        if(strcmp(lv_label_get_text(pet_voice_label),caption))lv_label_set_text(pet_voice_label,caption);
+        if(s.phase==PET_THINKING)lv_obj_add_state(pet_voice_button,LV_STATE_DISABLED);else lv_obj_remove_state(pet_voice_button,LV_STATE_DISABLED);
+        uint8_t level=s.phase==PET_LISTENING?voice_input_level():0;
+        for(int i=0;i<5;i++){int h=s.phase==PET_LISTENING?5+(level*(i%2?18:24))/100:5+(i%2)*3;lv_obj_set_height(pet_wave[i],h);lv_obj_set_y(pet_wave[i],235-h/2);}
     }else if(active==1&&second>=0&&(int32_t)(lv_tick_get()-hide_at)>=0){first=second=-1;flip_render();}
 }
 void kids_apps_create(lv_obj_t *screen,const lv_font_t *body,const lv_font_t *title,void (*home)(void))
@@ -173,21 +149,23 @@ void kids_apps_create(lv_obj_t *screen,const lv_font_t *body,const lv_font_t *ti
     for(int i=0;i<3;i++)if(counts[i]!=2||flip.words[i]>11)valid=false;
     if(!valid)new_flip();
     if(pet.version!=1)pet=(pet_state_t){.version=1};
-    pet_make_chirp();for(int i=0;i<2;i++)roots[i]=box(screen,0,0,466,466,i?0xF5F8FF:0xFFF6EC,233);
+    for(int i=0;i<2;i++)roots[i]=box(screen,0,0,466,466,i?0xF5F8FF:0xFFF6EC,233);
     lv_timer_create(tick,125,NULL);
 }
 lv_obj_t *kids_apps_view(unsigned i){return roots[i<2?i:0];}
 void kids_apps_activate(int index)
 {
     if(index==active)return;
+    if(active==0)pet_dialogue_leave();
     if(active>=0)lv_obj_clean(roots[active]);
     for(int i=0;i<3;i++){lv_image_cache_drop(&images[i]);heap_caps_free(pixels[i]);pixels[i]=NULL;}
     first=second=-1;active=index;if(active<0)return;
     lv_obj_t *root=roots[active];
     if(active==0){
-        label(root,"团团的小窝",83,36,300,title_font);label(root,"轻轻摸头，陪它玩一会儿",65,79,336,body_font);
-        box(root,146,124,53,67,0xEDB6A0,25);box(root,267,124,53,67,0xEDB6A0,25);
-        face=box(root,133,140,200,165,0xFFD5B5,75);lv_obj_add_flag(face,LV_OBJ_FLAG_CLICKABLE);lv_obj_add_event_cb(face,action,LV_EVENT_CLICKED,(void *)1);
+        label(root,"团团的小窝",83,32,300,title_font);label(root,"摸摸头 · 点回复可重听",65,72,336,body_font);
+        pet_displayed_phase=-1;
+        box(root,146,100,53,50,0xEDB6A0,25);box(root,267,100,53,50,0xEDB6A0,25);
+        face=box(root,133,112,200,140,0xFFD5B5,65);lv_obj_add_flag(face,LV_OBJ_FLAG_CLICKABLE);lv_obj_add_event_cb(face,action,LV_EVENT_CLICKED,(void *)1);
         eyes[0]=box(face,55,68,12,16,0x54403C,8);eyes[1]=box(face,133,68,12,16,0x54403C,8);
         box(face,30,96,30,15,0xF0A4A2,8);box(face,140,96,30,15,0xF0A4A2,8);
         for(int i=0;i<2;i++){
@@ -195,11 +173,15 @@ void kids_apps_activate(int index)
             lv_arc_set_bg_angles(mouth,0,180);lv_obj_set_style_arc_width(mouth,3,LV_PART_MAIN);lv_obj_set_style_arc_color(mouth,lv_color_hex(0x54403C),LV_PART_MAIN);lv_obj_set_style_arc_opa(mouth,255,LV_PART_MAIN);
             lv_obj_set_style_arc_opa(mouth,0,LV_PART_INDICATOR);lv_obj_remove_flag(mouth,LV_OBJ_FLAG_CLICKABLE);
         }
-        message=label(root,pet.asleep?"团团睡着了，轻触可以叫醒":"你好呀，我是团团！",53,302,360,body_font);
-        button("喂点心",105,335,122,2);button("睡觉 / 醒来",239,335,132,3);
-        pet_voice_button=button("和团团说话",115,381,236,4);pet_voice_label=lv_obj_get_child(pet_voice_button,0);
-        for(int i=0;i<5;i++){pet_wave[i]=box(root,175+i*29,371,12,7,0xF09A6A,6);lv_obj_remove_flag(pet_wave[i],LV_OBJ_FLAG_CLICKABLE);}
-        button("桌面",178,421,110,0);
+        message=label(root,pet.asleep?"团团睡着了，轻触可以叫醒":"你好呀，我是团团！",57,262,352,body_font);
+        lv_obj_set_height(message,66);lv_label_set_long_mode(message,LV_LABEL_LONG_WRAP);
+        lv_obj_add_flag(message,LV_OBJ_FLAG_CLICKABLE);lv_obj_add_event_cb(message,action,LV_EVENT_CLICKED,(void *)5);
+        button("喂点心",105,332,122,2);button("睡觉 / 醒来",239,332,132,3);
+        pet_voice_button=button("和团团说话",115,378,236,4);pet_voice_label=lv_obj_get_child(pet_voice_button,0);
+        for(int i=0;i<5;i++){pet_wave[i]=box(root,191+i*18,232,9,7,0xF09A6A,5);lv_obj_remove_flag(pet_wave[i],LV_OBJ_FLAG_CLICKABLE);}
+        /* Hardware PWR and the system swipe remain available for returning home. */
+        lv_obj_t *home=button("桌面",183,427,100,0);lv_obj_set_height(home,30);lv_obj_center(lv_obj_get_child(home,0));
+        pet_apply_voice();
     }else{
         label(root,"记忆翻牌",83,33,300,title_font);counter=label(root,"",53,72,360,body_font);
         for(int i=0;i<3;i++){
@@ -218,6 +200,7 @@ void kids_apps_activate(int index)
 }
 void kids_apps_debug(cJSON *root)
 {
+    pet_dialogue_state_t s=pet_dialogue_state();cJSON_AddNumberToObject(root,"pet_phase",s.phase);cJSON_AddNumberToObject(root,"pet_reply_sequence",s.sequence);cJSON_AddNumberToObject(root,"pet_audio_bytes",s.bytes);cJSON_AddStringToObject(root,"pet_reply",s.reply);
     cJSON_AddNumberToObject(root,"kids_active",active);cJSON_AddBoolToObject(root,"pet_asleep",pet.asleep);
     cJSON_AddNumberToObject(root,"pet_pats",pet.pats);cJSON_AddNumberToObject(root,"pet_meals",pet.meals);
     cJSON_AddNumberToObject(root,"flip_matched",flip.matched);cJSON_AddNumberToObject(root,"flip_first",first);cJSON_AddNumberToObject(root,"flip_second",second);

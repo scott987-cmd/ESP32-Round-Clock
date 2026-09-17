@@ -25,7 +25,7 @@ class ArtworkHTTPTests(unittest.TestCase):
         self.tmp.cleanup()
     def request(self,path,data=None,auth=True):
         request=urllib.request.Request('http://127.0.0.1:'+str(self.server.server_port)+path,
-            data=None if data is None else json.dumps(data).encode(),headers={'Authorization':'Bearer fixture-only'} if auth else {})
+            data=None if data is None else json.dumps(data).encode(),headers={'Content-Type':'application/json',**({'Authorization':'Bearer fixture-only'} if auth else {})})
         try:
             with urllib.request.urlopen(request) as r:return r.status,r.read()
         except urllib.error.HTTPError as e:return e.code,e.read()
@@ -55,5 +55,20 @@ class ArtworkHTTPTests(unittest.TestCase):
         SERVICE.story_service.put_job('1'*32,{'status':'working'})
         self.assertEqual(self.request('/v1/stories?job='+('1'*32))[0],200)
         SERVICE.story_service.ACTIVE.clear()
+
+    def test_pet_api_auth_limits_and_readback(self):
+        payload={'requestId':'3'*32,'text':'你好，团团'}
+        for route in ['/v1/pet?id='+('3'*32),'/v1/pet?id='+('3'*32)+'&audio=1']:
+            self.assertEqual(self.request(route,auth=False)[0],401)
+        self.assertEqual(self.request('/v1/pet',payload,False)[0],401)
+        self.assertEqual(self.request('/v1/pet',[])[0],400)
+        self.assertEqual(self.request('/v1/pet?id=../secret')[0],400)
+        with patch.object(SERVICE.pet_service,'worker'):
+            self.assertEqual(self.request('/v1/pet',payload)[0],200)
+            self.assertEqual(self.request('/v1/pet',payload)[0],200)
+            self.assertEqual(self.request('/v1/pet',dict(payload,text='conflict'))[0],400)
+        SERVICE.pet_service.ACTIVE.clear()
+        self.assertEqual(json.loads(self.request('/v1/pet?id='+('3'*32))[1])['status'],'working')
+        self.assertEqual(self.request('/v1/pet?id='+('3'*32)+'&audio=1')[0],400)
 
 if __name__=='__main__':unittest.main()

@@ -302,6 +302,11 @@ bool voice_input_is_recording(void)
     return voice_state == VOICE_RECORDING;
 }
 
+bool voice_input_is_processing(void)
+{
+    return voice_state == VOICE_UPLOADING;
+}
+
 uint8_t voice_input_level(void)
 {
     return current_voice_level;

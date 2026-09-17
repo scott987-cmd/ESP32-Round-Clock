@@ -29,18 +29,26 @@ def local_time(value):
 def percent(value):
     return value if type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100 else None
 
-def recent_tease(feed, now):
-    """Return a fresh, source-classified hint; never infer one from wording."""
-    for post in feed.get('tweets', []) if isinstance(feed.get('tweets'), list) else []:
-        if not isinstance(post, dict) or not fresh(post.get('at'), now):
+def recent_tease(feed, now, last_reset=''):
+    """A source refresh expires in 30m; a recent hint can remain useful for 24h."""
+    posts=feed.get('tweets', []) if isinstance(feed.get('tweets'), list) else []
+    posts=sorted((p for p in posts if isinstance(p,dict)),key=lambda p:stamp(p.get('at')) or 0,reverse=True)
+    for post in posts:
+        at=stamp(post.get('at'))
+        if at is None or not 0 <= now-at <= MAX_ALERT_AGE or (stamp(last_reset) is not None and at<=stamp(last_reset)):
             continue
         tease = post.get('tease_classification')
-        if not (isinstance(tease, dict) and tease.get('status') == 'ok' and
-                tease.get('teasing') is True):
+        analysis=post.get('device_interpretation')
+        model_hint=isinstance(analysis,dict) and analysis.get('verdict')=='upcoming'
+        source_hint=isinstance(tease,dict) and tease.get('status')=='ok' and tease.get('teasing') is True
+        if isinstance(analysis,dict) and analysis.get('verdict') in ('completed','irrelevant'):
+            continue
+        if not (model_hint or source_hint):
             continue
         ident, text = post.get('id'), post.get('text')
         if isinstance(ident, str) and isinstance(text, str) and text.strip():
-            return ident[:31], text.strip().replace('\n', ' ')[:120], post.get('at')
+            summary=analysis.get('summary') if model_hint else '公开账号释放了重置提示，尚未确认时间。'
+            return ident[:31], summary[:80], post.get('at')
     return '', '', ''
 
 def project(feed, forecast, now=None):
@@ -108,16 +116,16 @@ def project(feed, forecast, now=None):
     lines.append('消息发布（北京时间）\n' + local_time(announced))
     summary = signal.get('summary')
     sid = signal.get('tweet_id')
-    watch_id, watch_summary, watch_at = recent_tease(feed, now)
+    watch_id, watch_summary, watch_at = recent_tease(feed, now, latest)
     watch = bool(watch_id and source_fresh and forecast_fresh)
     if watch:
-        lines.insert(0, '近期提示（未确认）：' + watch_summary)
+        lines.insert(0, '近期提示（未确认）\n'+local_time(watch_at)+'\n'+watch_summary)
     return {
         'schemaVersion':2, 'fetchedAt':feed.get('fetched_at'), 'stale':not source_fresh,
         'active':eligible, 'alertEligible':eligible,
         # Do not consume an unconfirmed new signal: it may be confirmed on a
         # later poll, after a partial source failure or an upcoming announcement.
-        'rememberSignal':source_fresh and (eligible or watch or (signal_epoch is not None and now-signal_epoch > MAX_ALERT_AGE)),
+        'rememberSignal':source_fresh and (eligible or (signal_epoch is not None and now-signal_epoch > MAX_ALERT_AGE)),
         'signalId':sid[:31] if isinstance(sid,str) else '',
         'announcedAt':announced, 'summary':summary[:120] if isinstance(summary,str) else '',
         'analysis':'历史消息，不代表刚刚发生重置。' if not recent else '社区信号，请到原站和个人用量页核实。',
@@ -127,7 +135,8 @@ def project(feed, forecast, now=None):
         'forecastAvailable':available, 'probability24':p24 if available else None,
         'probability48':p48 if available else None, 'forecastMeta':meta,
         'forecastExpiresAt':int(stamp(forecast.get('updated_at'))+MAX_SOURCE_AGE) if forecast_fresh else 0,
-        'details':'\n\n'.join(lines),
+        # Firmware schema-2 uses a 1600-byte UTF-8 details buffer.
+        'details':'\n\n'.join(lines).encode()[:1500].decode('utf-8',errors='ignore'),
         'updateLabel':'来源更新 '+local_time(feed.get('fetched_at')) if source_fresh else '来源过期 · 不触发提醒',
         # Optional schema-2 extension: older firmwares ignore it; newer ones
         # can announce a current classified hint without calling it a reset.

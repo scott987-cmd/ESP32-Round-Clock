@@ -13,6 +13,7 @@
 
 #include "screenshot_bridge.h"
 #include "ui_debug.h"
+#include "pet_dialogue.h"
 #include "wifi_setup.h"
 #include "companion_apps.h"
 #include "avatar_store.h"
@@ -136,6 +137,12 @@ static void screenshot_task(void *context)
                 bool ok=sscanf(command+10,"%u %16s",&slot,hash)==2 && slot<8 && avatar_store_clear(slot,hash)==ESP_OK;
                 write_all((const uint8_t *)(ok?"RCOK":"RCER"),4);
             }
+#if CONFIG_ROUND_CLOCK_USB_TEST_BRIDGE
+            else if (!strncmp(command,"RCPETSAY ",9)) {
+                esp_err_t result=pet_dialogue_test_text(command+9);
+                write_all((const uint8_t *)(result==ESP_OK?"RCOK":"RCER"),4);
+            }
+#endif
             else if (!strncmp(command,"RCNOTICE ",9)) {
                 unsigned phase; esp_err_t r=ESP_ERR_INVALID_ARG;
                 if(sscanf(command+9,"%u",&phase)==1 && bsp_display_lock(5000)==ESP_OK) {

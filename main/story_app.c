@@ -30,6 +30,7 @@ static uint8_t *pixels;
 static lv_image_dsc_t image;
 static book_t cached,*incoming;
 static bool active,online,busy,finished,ok,autoplay,clear_job;
+static bool open_requested;
 static unsigned scene;
 static SemaphoreHandle_t mutex;
 static char job_id[33],download_id[33],cleanup_id[33],theme[16],message[128]="内置故事 · 离线可听";
@@ -200,7 +201,7 @@ static void action(lv_event_t *e)
     if(a==1||a==2){int node=online?(a==1?cached.nodes[scene].a:cached.nodes[scene].b):(a==1?builtin_story[scene].a:builtin_story[scene].b);if(node>=0)scene=node;audio_local_stop();autoplay=true;save_progress();render();}
     if(a==3){audio_local_stop();autoplay=true;}
     if(a==4){lv_obj_remove_flag(menu,LV_OBJ_FLAG_HIDDEN);}
-    if(a==5){lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);}
+    if(a==5){lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);autoplay=true;}
     if(a==6||a==7){
         if(a==7&&!cached.id[0])return;
         online=a==7;scene=0;audio_local_stop();autoplay=true;save_progress();lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);strlcpy(message,online?"已下载 · 离线可听":"内置故事 · 离线可听",sizeof(message));render();
@@ -218,6 +219,7 @@ static void tick(lv_timer_t *t)
     if(done){finished=false;busy=false;if(clear_job)job_id[0]=0;if(incoming){audio_local_stop();strlcpy(cleanup_id,cached.id,sizeof(cleanup_id));cached=*incoming;heap_caps_free(incoming);incoming=NULL;online=true;scene=0;autoplay=active;}}
     xSemaphoreGive(mutex);
     if(done){
+        if(success&&active)lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);
         strlcpy(message,success?"新故事已下载 · 离线可听":operation==2?download_error:job_id[0]?"网络暂忙，稍后自动查询":"本次未完成，原故事仍可听",sizeof(message));
         if(!save_progress()){cleanup_id[0]=0;strlcpy(message,"进度保存失败，旧故事仍保留",sizeof(message));}
         next_poll=lv_tick_get()+15000;render();
@@ -255,8 +257,13 @@ lv_obj_t *story_app_view(void){return view;}
 bool story_app_request(const char *id)
 {
     if(!id||strlen(id)!=32||strspn(id,"0123456789abcdef")!=32||busy||job_id[0]||atomic_load(&cleaning))return false;
-    if(!strcmp(id,cached.id)){online=true;scene=0;autoplay=active;save_progress();render();return true;}
-    strlcpy(download_id,id,sizeof(download_id));return launch(2);
+    if(!strcmp(id,cached.id)){online=true;scene=0;open_requested=true;autoplay=active;save_progress();render();return true;}
+    strlcpy(download_id,id,sizeof(download_id));bool started=launch(2);if(started)open_requested=true;return started;
+}
+void story_app_resume(void)
+{
+    if(!active){open_requested=true;return;}
+    open_requested=false;lv_obj_add_flag(menu,LV_OBJ_FLAG_HIDDEN);autoplay=true;render();
 }
 void story_app_set_active(bool value)
 {
@@ -279,7 +286,7 @@ void story_app_set_active(bool value)
     /* This is the app's first screen, rather than a hidden second-level
      * menu.  A parent can now see the generate actions without guessing that
      * the small bookshelf button is an entry point. */
-    autoplay=false;render();
+    autoplay=false;render();if(open_requested)story_app_resume();
 }
 void story_app_debug(cJSON *root)
 {

@@ -234,8 +234,9 @@ void launcher_create(lv_obj_t *parent,const lv_font_t *font,const char *const *n
         lv_obj_set_style_border_width(tiles[slot],2,0);
         lv_obj_set_style_border_color(tiles[slot],lv_color_white(),0);
         lv_obj_set_style_border_opa(tiles[slot],LV_OPA_50,0);
-        lv_obj_set_style_shadow_width(tiles[slot],14,0);
-        lv_obj_set_style_shadow_opa(tiles[slot],LV_OPA_30,0);
+        /* Changing radius every drag frame defeats the software shadow cache.
+         * Keep the gradient and crisp rim, without recomputing blurred masks. */
+        lv_obj_set_style_shadow_width(tiles[slot],0,0);
         lv_obj_add_event_cb(tiles[slot],icon_draw,LV_EVENT_DRAW_MAIN,NULL);
         lv_obj_remove_flag(tiles[slot],LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
     }
