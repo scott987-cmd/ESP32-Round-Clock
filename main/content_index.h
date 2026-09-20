@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
-#define CONTENT_BYTES 1971184u
-#define CONTENT_CRC 3054325021u
+#define CONTENT_BYTES 2071080u
+#define CONTENT_CRC 2031242800u
 #define CONTENT_ENGLISH_OFFSET 16u
 #define CONTENT_ENGLISH_BYTES 423128u
 typedef struct {const char *title,*text,*left,*right;int picture,a,b;uint32_t audio,bytes;} story_node_t;
@@ -11,4 +11,13 @@ static const story_node_t builtin_story[]={
 {"小鱼的秘密","小鱼指着水面说：看，星星也在湖里跳舞！那是星光的倒影。小猫知道了，水里的星星不用捞。","一起看星星","回家画星星",3,3,4,1011748,316220},
 {"分享美好","朋友们坐在一起，看星星一闪一闪。小猫说：原来，美好的东西不一定要带走，和朋友分享也很快乐。","再听一遍","重新开始",0,-1,0,1327968,337772},
 {"小小画家","小猫回到家，把今晚看到的星光画在纸上，送给朋友。大家开心地说：这是一份温暖的礼物！","再听一遍","重新开始",10,-1,0,1665740,305444}
+};
+#define PET_ASSET_COUNT 4
+#define PET_ASSET_SIZE 220
+typedef struct {const char *kind,*name;uint32_t offset,bytes;} pet_asset_t;
+static const pet_asset_t builtin_pets[PET_ASSET_COUNT]={
+{"cat","团团",1971184,26831},
+{"dog","旺旺",1998016,25435},
+{"parrot","小羽",2023452,22598},
+{"frog","跳跳",2046052,25026}
 };

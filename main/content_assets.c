@@ -45,6 +45,21 @@ bool content_picture(unsigned word,unsigned size,uint8_t *target)
     }
     heap_caps_free(compressed);return ok;
 }
+bool content_pet_picture(unsigned pet,uint8_t *target)
+{
+    if(!target||pet>=PET_ASSET_COUNT)return false;
+    const pet_asset_t *entry=&builtin_pets[pet];
+    uint8_t *compressed=heap_caps_malloc(entry->bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(!compressed)return false;
+    bool ok=false;
+    if(content_read(entry->offset,compressed,entry->bytes)==ESP_OK){
+        z_stream s={.zalloc=allocate,.zfree=release,.next_in=compressed,.avail_in=entry->bytes,
+            .next_out=target,.avail_out=PET_ASSET_SIZE*PET_ASSET_SIZE*2};
+        if(inflateInit(&s)==Z_OK){ok=inflate(&s,Z_FINISH)==Z_STREAM_END&&
+            s.total_out==PET_ASSET_SIZE*PET_ASSET_SIZE*2&&s.avail_in==0;inflateEnd(&s);}
+    }
+    heap_caps_free(compressed);return ok;
+}
 esp_err_t content_word_play(unsigned word)
 {
     if(word>=ENGLISH_WORD_COUNT)return ESP_ERR_INVALID_ARG;

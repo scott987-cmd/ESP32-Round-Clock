@@ -14,6 +14,8 @@
 #include "esp_random.h"
 #include "voice_input.h"
 #include "service_config.h"
+#include "snapshot_store.h"
+#include "wifi_setup.h"
 
 #define RESPONSE_BYTES (64*1024)
 extern const uint8_t device_ca_start[] asm("_binary_device_ca_pem_start");
@@ -172,10 +174,11 @@ static void render_agents(void)
 }
 static cJSON *request(const char *path,const char *body)
 {
+    if(!wifi_setup_has_ip())return NULL;
     char url[256]; snprintf(url,sizeof(url),CLOCK_API_BASE "%s",path);
     esp_http_client_config_t cfg={.url=url,.timeout_ms=15000,.buffer_size=2048,
         .cert_pem=(const char *)device_ca_start,.client_cert_pem=(const char *)device_client_cert_start,
-        .client_key_pem=(const char *)device_client_key_start};
+        .client_key_pem=(const char *)device_client_key_start,.disable_auto_redirect=true};
     esp_http_client_handle_t client=esp_http_client_init(&cfg);
     if(!client) return NULL;
     if(CLOCK_WALLPAPER_TOKEN[0]) { char auth[192]; snprintf(auth,sizeof(auth),"Bearer %s",CLOCK_WALLPAPER_TOKEN); esp_http_client_set_header(client,"Authorization",auth); }
@@ -202,9 +205,23 @@ static cJSON *request(const char *path,const char *body)
 static void companion_task(void *ctx)
 {
     (void)ctx; int64_t next=0, next_avatar=0;
+    char *stored=heap_caps_calloc(1,RESPONSE_BYTES+1,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(stored){
+        if(snapshot_load("/wallpaper/agents-v1",stored,RESPONSE_BYTES,NULL)){
+            cJSON *j=cJSON_Parse(stored);
+            if(cJSON_IsArray(cJSON_GetObjectItem(j,"tasks"))){cJSON_AddBoolToObject(j,"offlineSnapshot",true);xSemaphoreTake(lock,portMAX_DELAY);agent_pending=j;xSemaphoreGive(lock);}else cJSON_Delete(j);
+        }
+        memset(stored,0,RESPONSE_BYTES+1);
+        if(snapshot_load("/wallpaper/notes-v1",stored,RESPONSE_BYTES,NULL)){
+            cJSON *j=cJSON_Parse(stored);
+            if(cJSON_IsArray(cJSON_GetObjectItem(j,"notes"))){cJSON_AddBoolToObject(j,"offlineSnapshot",true);xSemaphoreTake(lock,portMAX_DELAY);notes_pending=j;xSemaphoreGive(lock);}else cJSON_Delete(j);
+        }
+        free(stored);
+    }
     for(;;) {
         if(refresh_agents || esp_timer_get_time()>=next) {
             refresh_agents=false; cJSON *data=request("/v1/agents",NULL);
+            if(data&&cJSON_IsArray(cJSON_GetObjectItem(data,"tasks"))){char *s=cJSON_PrintUnformatted(data);if(s){snapshot_save("/wallpaper/agents-v1",s,strlen(s)+1,(uint32_t)time(NULL));free(s);}}
             xSemaphoreTake(lock,portMAX_DELAY);
             if(data) { cJSON_Delete(agent_pending); agent_pending=data; }
             agent_error=data==NULL;
@@ -254,7 +271,7 @@ void companion_apps_tick(bool awake)
     cJSON *next_notes=notes_pending; notes_pending=NULL; bool note_error=notes_error; notes_error=false;
     char message[128]; strlcpy(message,note_status,sizeof(message));
     xSemaphoreGive(lock);
-    if(next) { detect_agent_changes(next); cJSON_Delete(agent_data); agent_data=next; render_agents(); }
+    if(next) {if(!flag(next,"offlineSnapshot"))detect_agent_changes(next);cJSON_Delete(agent_data);agent_data=next;render_agents();if(flag(next,"offlineSnapshot"))lv_label_set_text(agent_status,"历史缓存 · 联网后更新");}
     if(error) lv_label_set_text(agent_status,agent_data?"更新失败 · 显示上次快照":"连接失败，请点击刷新");
     if(next_notes) {
         cJSON *note;
@@ -264,10 +281,10 @@ void companion_apps_tick(bool awake)
                 strlcpy(note_status,!strcmp(str(note,"state"),"ready")?"笔记已整理，可开始新笔记":"原文已保存，整理失败可稍后重试",sizeof(note_status));
                 xSemaphoreGive(lock);
             }
-            bool completed=!notes_recording && last_note_id[0] && !strcmp(str(note,"id"),last_note_id) && strcmp(str(note,"state"),"pending");
+            bool completed=!flag(next_notes,"offlineSnapshot")&&!notes_recording && last_note_id[0] && !strcmp(str(note,"id"),last_note_id) && strcmp(str(note,"state"),"pending");
             cJSON *old;
             cJSON_ArrayForEach(old,cJSON_GetObjectItem(notes_data,"notes"))
-                if(!strcmp(str(old,"id"),str(note,"id")) && !strcmp(str(old,"state"),"pending") && strcmp(str(note,"state"),"pending"))
+                if(!flag(next_notes,"offlineSnapshot")&&!strcmp(str(old,"id"),str(note,"id")) && !strcmp(str(old,"state"),"pending") && strcmp(str(note,"state"),"pending"))
                     completed=true;
             if(completed) {
                 char key[64]; snprintf(key,sizeof(key),"note:%s",str(note,"id"));
@@ -276,6 +293,7 @@ void companion_apps_tick(bool awake)
             }
         }
         cJSON_Delete(notes_data); notes_data=next_notes; render_notes();
+        if(flag(next_notes,"offlineSnapshot"))lv_label_set_text(notes_status,"历史缓存 · 联网后更新");
     }
     if(note_error) lv_label_set_text(notes_status,notes_data?"连接失败 · 保留上次记录":"连接失败，请点击最新重试");
     if(strcmp(lv_label_get_text(notes_record_status),message)) lv_label_set_text(notes_record_status,message);
@@ -492,6 +510,7 @@ static void notes_work(void)
         refresh_notes=false; int requested_offset=notes_offset;
         char path[80]; snprintf(path,sizeof(path),"/v1/notes?offset=%d",requested_offset);
         cJSON *data=request(path,NULL);
+        if(data&&requested_offset==0&&cJSON_IsArray(cJSON_GetObjectItem(data,"notes"))){char *s=cJSON_PrintUnformatted(data);if(s){snapshot_save("/wallpaper/notes-v1",s,strlen(s)+1,(uint32_t)time(NULL));free(s);}}
         xSemaphoreTake(lock,portMAX_DELAY);
         if(data && requested_offset==notes_offset) { cJSON_Delete(notes_pending); notes_pending=data; }
         else cJSON_Delete(data);

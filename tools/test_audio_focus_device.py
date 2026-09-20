@@ -86,7 +86,7 @@ def main():
 
         play()
         device.view('pet')
-        device.tap(233, 399)
+        device.tap(233, 362)
         wait(lambda s: s['voice_recording'] and s['pet_phase'] == 1 and not s['music_playing'])
         device.view('clock')
         wait(lambda s: not s['voice_recording'] and not s['voice_processing'] and s['pet_phase'] == 4)

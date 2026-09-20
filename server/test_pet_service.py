@@ -31,6 +31,16 @@ class PetTests(unittest.TestCase):
             with patch.object(s,'api',return_value={'choices':[{'message':{'content':json.dumps(dict(reply=reply,action=action))}}]}) as api:
                 with self.assertRaises(ValueError):s.generate('你好')
                 self.assertEqual(api.call_count,1)
+    def test_selected_pet_identity_is_in_prompt(self):
+        pcm=b'\x01\x00'*3200
+        def api(path,body,limit):
+            if 'chat' in path:
+                self.assertIn('小狗旺旺',body['messages'][0]['content'])
+                return {'choices':[{'message':{'content':json.dumps({'reply':'汪汪，我们一起玩！','action':'none'})}}]}
+            return {'extra_info':{'audio_sample_rate':16000,'audio_channel':1,'audio_format':'pcm'},'data':{'audio':pcm.hex()}}
+        with patch.object(s,'api',api):
+            reply,_=s.generate('你好','dog')
+        self.assertEqual(reply['reply'],'汪汪，我们一起玩！')
     def test_partial_failure_not_ready(self):
         with patch.object(s,'generate',side_effect=RuntimeError('secret prompt')):s.worker('2'*32,'private','hash')
         self.assertEqual(s.job('2'*32)['status'],'failed')
@@ -49,6 +59,7 @@ class PetTests(unittest.TestCase):
     def test_input_validation(self):
         for ident,text in [('../secret','你好'),('1'*32,None),('1'*32,'字'*301),('1'*32,'\x00')]:
             with self.assertRaises(ValueError):s.start(ident,text)
+        with self.assertRaises(ValueError):s.start('1'*32,'你好','dragon')
 
 
 if __name__=='__main__':unittest.main()

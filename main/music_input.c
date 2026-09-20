@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+#include "snapshot_store.h"
+#include "wifi_setup.h"
 #include "cJSON.h"
 #include "esp_http_client.h"
 #include "esp_heap_caps.h"
@@ -70,6 +73,16 @@ static void load_catalogue(cJSON *root)
         strlcpy(state.saved[i], valid_id(id) ? id : "", sizeof(state.saved[i]));
     }
     taskEXIT_CRITICAL(&mux);
+    music_input_state_t copy=music_input_state();
+    snapshot_save("/wallpaper/music-v1",copy.saved,sizeof(copy.saved),(uint32_t)time(NULL));
+}
+void music_input_restore_cached(void)
+{
+    char saved[4][33];
+    if(snapshot_load("/wallpaper/music-v1",saved,sizeof(saved),NULL)!=sizeof(saved))return;
+    for(unsigned i=0;i<4;i++)if(saved[i][32]||(*saved[i]&&!valid_id(saved[i])))return;
+    taskENTER_CRITICAL(&mux);memcpy(state.saved,saved,sizeof(saved));taskEXIT_CRITICAL(&mux);
+    if(saved[0][0])set_status("SAVED MUSIC - CONNECT TO PLAY");
 }
 static esp_err_t get_json(const char *path, const char *body, cJSON **root)
 {
@@ -273,6 +286,7 @@ esp_err_t music_input_finish(void)
 esp_err_t music_input_play_artwork(const char *id)
 {
     if (!valid_id(id)) return ESP_ERR_INVALID_ARG;
+    if(!wifi_setup_has_ip()){set_status("SAVED MUSIC - CONNECT TO PLAY");return ESP_ERR_INVALID_STATE;}
     playback_job_t *job=calloc(1,sizeof(*job));if(!job)return ESP_ERR_NO_MEM;
     taskENTER_CRITICAL(&mux);
     /* Displaced HTTP workers close themselves; cap sockets during rapid taps. */

@@ -20,10 +20,10 @@ d=Device(args.port,output)
 try:
     d.view('pet');before=d.state()
     if args.acoustic:
-        d.tap(233,399)
+        d.tap(233,362)
         assert d.state()['pet_phase']==1, 'MIC did not enter listening state'
         subprocess.run(['say','-v','Tingting','-r','150','团团你好，我想摸摸你的头。'],check=True,timeout=15)
-        time.sleep(0.8);d.tap(233,399)
+        time.sleep(0.8);d.tap(233,362)
     else:
         d.command('RCPETSAY 团团你好，给你点心。')
     d.view('clock')
@@ -56,8 +56,8 @@ try:
         time.sleep(.4)
     assert replay['english_audio_sequence']>sequence and replay['english_audio_written']==s['pet_audio_bytes'], 'Tap reply did not replay audio'
     # This short recording must fail gracefully, not stay stuck as "listening".
-    d.pointer(233,399,True);d.pointer(233,399,False)
-    d.pointer(233,399,True);d.pointer(233,399,False)
+    d.pointer(233,362,True);d.pointer(233,362,False)
+    d.pointer(233,362,True);d.pointer(233,362,False)
     deadline=time.monotonic()+8
     while time.monotonic()<deadline and d.state()['pet_phase'] in (1,2):time.sleep(0.2)
     assert d.state()['pet_phase']==4, 'Short capture did not leave recording state'

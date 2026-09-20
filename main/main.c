@@ -19,6 +19,7 @@
 #include "ui_debug.h"
 #include "voice_input.h"
 #include "audio_bus.h"
+#include "snapshot_store.h"
 #include "wallpaper_input.h"
 #include "wifi_setup.h"
 #include "companion_apps.h"
@@ -70,6 +71,7 @@
 #define AXP2101_INTSTS2 0x49
 #define AXP2101_PKEY_LONG_MASK BIT2
 #define AXP2101_PKEY_SHORT_MASK BIT3
+#define POWER_BUTTON_DOUBLE_PRESS_MS 500
 #define WALLPAPER_PATH "/wallpaper/current.rgb565"
 #define WALLPAPER_TEMP_PATH "/wallpaper/current.tmp"
 #define WALLPAPER_BACKUP_PATH "/wallpaper/current.bak"
@@ -83,7 +85,7 @@
 #define CODEX_RESET_RESPONSE_BYTES 4096
 #define CODEX_RESET_REFRESH_MS (5 * 60 * 1000)
 #define CODEX_RESET_RETRY_MS 60000
-#define WIFI_SCAN_MAX_RESULTS 4
+#define WIFI_SCAN_MAX_RESULTS WIFI_SETUP_SCAN_LIMIT
 #define APP_SWIPE_DISTANCE 72
 #define APP_OVERVIEW_SWIPE_DISTANCE 58
 #define APP_OVERVIEW_EDGE_Y 340
@@ -158,12 +160,19 @@ static lv_obj_t *wifi_password_panel;
 static lv_obj_t *wifi_selected_label;
 static lv_obj_t *wifi_password_input;
 static lv_obj_t *wifi_keyboard;
-static lv_obj_t *wifi_setup_panel, *wifi_setup_qr, *wifi_setup_message;
+static lv_obj_t *wifi_setup_panel, *wifi_setup_qr, *wifi_setup_message, *wifi_setup_credentials;
 static bool wifi_setup_was_active;
+static bool wifi_scan_pending;
+static uint32_t wifi_scan_revision;
+static void wifi_scan_refresh_locked(void);
 static lv_obj_t *remote_status_label;
 static lv_obj_t *music_status_label;
 static lv_obj_t *radio_status_label;
 static lv_obj_t *wallpaper_studio_status_label;
+static lv_obj_t *remote_status_pill;
+static lv_obj_t *music_status_pill;
+static lv_obj_t *radio_status_pill;
+static lv_obj_t *wallpaper_status_pill;
 static lv_obj_t *wallpaper_record_button;
 static lv_obj_t *wallpaper_record_label;
 static lv_obj_t *wallpaper_finish_button;
@@ -187,6 +196,8 @@ static TaskHandle_t wallpaper_refresh_task_handle;
 
 typedef struct {
     char city[24];
+    uint32_t saved_at;
+    bool cached;
     float temperature;
     float apparent;
     float high;
@@ -204,6 +215,7 @@ typedef struct {
 
 typedef struct {
     char generated_at[32];
+    bool cached;
     uint64_t total_tokens;
     uint8_t agent_count;
     quota_agent_t agents[QUOTA_MAX_AGENTS];
@@ -211,6 +223,7 @@ typedef struct {
 
 typedef struct {
     char signal_id[32];
+    bool cached;
     char watch_id[32];
     char event_label[80];
     char event_time[48];
@@ -489,7 +502,11 @@ static void apply_pending_weather_locked(void)
     snprintf(text, sizeof(text), use_chinese ? "风速\n%.0f km/h" : "WIND\n%.0f km/h",
              weather.wind);
     lv_label_set_text(weather_wind_label, text);
-    lv_label_set_text(weather_update_label, use_chinese ? "刚刚更新" : "UPDATED NOW");
+    if(weather.cached){
+        time_t t=weather.saved_at;struct tm when;char stamp[32]="--";
+        if(t>1700000000&&gmtime_r(&t,&when))strftime(stamp,sizeof(stamp),"%m-%d %H:%M UTC",&when);
+        lv_label_set_text_fmt(weather_update_label,"%s · %s",use_chinese?"历史缓存":"CACHED",stamp);
+    }else lv_label_set_text(weather_update_label, use_chinese ? "刚刚更新" : "UPDATED NOW");
 }
 
 static void format_compact_tokens(uint64_t value, char *buffer, size_t size)
@@ -530,7 +547,7 @@ static void apply_pending_quota_locked(void)
     char text[64];
     format_compact_tokens(quota.total_tokens, text, sizeof(text));
     lv_label_set_text(quota_total_label, text);
-    snprintf(text, sizeof(text), "LLMQuota %.10s %.5s UTC",
+    snprintf(text, sizeof(text), "%s %.10s %.5s UTC",quota.cached?"缓存":"LLMQuota",
              quota.generated_at, strlen(quota.generated_at) > 11 ? quota.generated_at + 11 : "--:--");
     lv_label_set_text(quota_update_label, text);
     for (size_t i = 0; i < QUOTA_MAX_AGENTS; ++i) {
@@ -631,7 +648,7 @@ static void apply_pending_codex_reset_locked(void)
     codex_reset_event_epoch = data->event_epoch;
     codex_reset_age_minute = 0;
     lv_label_set_text(codex_reset_summary_label, data->details);
-    lv_label_set_text(codex_reset_update_label, data->update_label);
+    lv_label_set_text(codex_reset_update_label, data->cached?"历史缓存 · 联网后更新":data->update_label);
     if (data->forecast_available && time(NULL) >= 1700000000 &&
         time(NULL) <= data->forecast_expires) {
         codex_reset_forecast_expires = data->forecast_expires;
@@ -750,6 +767,8 @@ static const char *localized_remote_status(const char *status)
         {"MUSIC CREATION FAILED", "本次生成失败，已保存作品仍可播放"},
         {"MUSIC SYNC FAILED", "网络暂不可用，正在重试同步"},
         {"MUSIC PLAYBACK FAILED", "音乐试听失败"},
+        {"SAVED MUSIC - CONNECT TO PLAY", "音乐记录已保存，联网后播放"},
+        {"OFFLINE - CONNECT WI-FI", "当前离线，请先连接无线网络"},
         {"RECORDING CANCELLED", "录音已取消"},
         {"MUSIC IDEA FAILED", "音乐想法失败"},
         {"READY FOR WALLPAPER IDEA", "说出壁纸画面"},
@@ -811,7 +830,7 @@ static void refresh_settings_locked(void)
 
 static void update_record_controls(unsigned app, const char *status, bool recording)
 {
-    static const uint32_t colors[] = {0x147DF5, 0xA44BC4, 0x596DEB, 0x129EAF};
+    static const uint32_t colors[] = {0x6ED8B6, 0xA37AF4, 0x73A7F6, 0x56C4D8};
     bool busy = strstr(status, "RECOGNIZING") || strstr(status, "CREATING") ||
                 strstr(status, "FINISHING");
     bool ready = !recording && !busy && !voice_input_is_recording() &&
@@ -839,6 +858,12 @@ static void remote_refresh_status_locked(void)
         lv_label_set_text(remote_status_label,
                           localized_remote_status(voice_input_status()));
     }
+    if (remote_status_pill) {
+        bool recording = voice_input_is_recording();
+        bool processing = voice_input_is_processing();
+        lv_obj_set_style_bg_color(remote_status_pill,
+            lv_color_hex(recording ? 0xFFE5E2 : processing ? 0xFFF0CE : 0xF1F4F8), 0);
+    }
 }
 
 static void music_refresh_status_locked(void)
@@ -849,10 +874,25 @@ static void music_refresh_status_locked(void)
                           localized_remote_status(music_input_status()));
     }
     music_input_state_t s = music_input_state();
+    bool recording = s.recording && voice_input_is_recording();
+    if (music_status_pill) {
+        lv_obj_set_style_bg_color(music_status_pill,
+            lv_color_hex(recording ? 0xFFE5E2 : s.busy ? 0xFFF0CE : s.playing ? 0xEDE4FF : 0xF1F4F8), 0);
+    }
+    if (record_controls[1]) {
+        lv_label_set_text(lv_obj_get_child(record_controls[1], 0),
+            recording ? localized("RECORDING", "正在录音") : localized("SPEAK MUSIC IDEA", "说出音乐想法"));
+        lv_obj_set_style_bg_color(record_controls[1], lv_color_hex(recording ? 0xFF7168 : 0xA37AF4), 0);
+    }
+    if (finish_controls[1]) {
+        lv_label_set_text(lv_obj_get_child(finish_controls[1], 0),
+            recording ? localized("STOP AND CREATE", "结束并生成") : localized("CREATE MUSIC", "生成音乐"));
+    }
     if (music_play_button) {
         if (s.playing || (!s.busy && s.saved[0][0])) lv_obj_remove_state(music_play_button, LV_STATE_DISABLED);
         else lv_obj_add_state(music_play_button, LV_STATE_DISABLED);
-        lv_label_set_text(lv_obj_get_child(music_play_button, 0), s.playing ? LV_SYMBOL_STOP : LV_SYMBOL_PLAY);
+        lv_label_set_text(lv_obj_get_child(music_play_button, 0),
+            s.playing ? localized("STOP", "停止播放") : localized("PLAY", "播放音乐"));
     }
     if (s.busy && !s.recording) lv_obj_add_state(record_controls[1], LV_STATE_DISABLED);
 }
@@ -872,7 +912,12 @@ static void radio_refresh_status_locked(void)
     if (radio_play_button) {
         if (s.playing || (!s.busy && s.saved[radio_station][0])) lv_obj_remove_state(radio_play_button, LV_STATE_DISABLED);
         else lv_obj_add_state(radio_play_button, LV_STATE_DISABLED);
-        lv_label_set_text(lv_obj_get_child(radio_play_button, 0), s.playing ? LV_SYMBOL_STOP : LV_SYMBOL_PLAY);
+        lv_label_set_text(lv_obj_get_child(radio_play_button, 0),
+            s.playing ? localized("STOP", "停止播放") : localized("PLAY", "播放频道"));
+    }
+    if (radio_status_pill) {
+        lv_obj_set_style_bg_color(radio_status_pill,
+            lv_color_hex(recording ? 0xFFE5E2 : s.busy ? 0xFFF0CE : s.playing ? 0xEDE4FF : 0xF1F4F8), 0);
     }
     for (unsigned i = 0; i < 3; i++) {
         bool selected = radio_station == i + 1;
@@ -893,6 +938,13 @@ static void wallpaper_studio_refresh_status_locked(void)
     if (wallpaper_studio_status_label != NULL) {
         lv_label_set_text(wallpaper_studio_status_label,
                           localized_remote_status(wallpaper_input_status()));
+    }
+    if (wallpaper_status_pill != NULL) {
+        const char *status = wallpaper_input_status();
+        bool recording = strstr(status, "RECORDING") != NULL;
+        bool creating = strstr(status, "RECOGNIZING") != NULL || strstr(status, "CREATING") != NULL;
+        lv_obj_set_style_bg_color(wallpaper_status_pill,
+            lv_color_hex(recording ? 0xFFE5E2 : creating ? 0xFFF0CE : 0xF1F4F8), 0);
     }
     if (wallpaper_record_button != NULL && wallpaper_record_label != NULL) {
         bool recording = strcmp(wallpaper_input_status(),
@@ -952,6 +1004,7 @@ static void set_display_brightness(uint8_t brightness)
 static void clock_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
+    wifi_scan_refresh_locked();
     int requested_power = requested_screen_power;
     if (requested_power >= 0) {
         requested_screen_power = -1;
@@ -1250,6 +1303,8 @@ esp_err_t ui_debug_state(char *buffer, size_t capacity)
     lv_obj_update_layout(lv_screen_active());
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "view", current_app_view);
+    cJSON_AddNumberToObject(root, "uptime_ms", esp_timer_get_time()/1000);
+    cJSON_AddNumberToObject(root, "reset_reason", esp_reset_reason());
     cJSON_AddStringToObject(root, "build", __DATE__ " " __TIME__);
     cJSON_AddNumberToObject(root, "launcher_render_count", launcher_render_count);
     cJSON_AddNumberToObject(root, "launcher_render_mean_us", launcher_render_count ? launcher_render_total_us / launcher_render_count : 0);
@@ -1281,6 +1336,12 @@ esp_err_t ui_debug_state(char *buffer, size_t capacity)
     wifi_setup_state_t setup; wifi_setup_state(&setup);
     cJSON_AddBoolToObject(root, "wifi_setup_active", setup.active);
     cJSON_AddBoolToObject(root, "wifi_setup_testing", setup.testing);
+    cJSON_AddBoolToObject(root, "wifi_setup_relay", setup.relay);
+    cJSON_AddNumberToObject(root, "wifi_setup_clients", setup.clients);
+    cJSON_AddBoolToObject(root, "wifi_scan_pending", wifi_scan_pending);
+    cJSON_AddNumberToObject(root, "wifi_scan_count", scanned_network_count);
+    cJSON_AddStringToObject(root, "weather_temperature", lv_label_get_text(weather_temp_label));
+    cJSON_AddStringToObject(root, "reset_event_time", lv_label_get_text(codex_reset_time_label));
     cJSON_AddNumberToObject(root, "wifi_saved_networks", setup.saved_count);
     cJSON_AddStringToObject(root, "wifi_setup_status", setup.status);
     cJSON_AddBoolToObject(root, "wifi_connected", wifi_events && (xEventGroupGetBits(wifi_events) & WIFI_READY_BIT));
@@ -2144,6 +2205,7 @@ static void wifi_network_event_cb(lv_event_t *event)
     lv_label_set_text_fmt(wifi_selected_label, "%s\n%s", localized("PASSWORD FOR", "输入密码"),
                           selected_wifi_ssid);
     lv_textarea_set_text(wifi_password_input, "");
+    if(scanned_networks[index].authmode==WIFI_AUTH_OPEN){wifi_connect_selected();return;}
     lv_obj_remove_flag(wifi_password_panel, LV_OBJ_FLAG_HIDDEN);
     lv_keyboard_set_textarea(wifi_keyboard, wifi_password_input);
     lv_obj_add_state(wifi_password_input, LV_STATE_FOCUSED);
@@ -2158,17 +2220,21 @@ static void wifi_scan_event_cb(lv_event_t *event)
     lv_obj_clean(wifi_network_list);
     scanned_network_count = 0;
 
-    esp_err_t result = esp_wifi_scan_start(NULL, true);
-    uint16_t available = 0;
-    if (result == ESP_OK) {
-        result = esp_wifi_scan_get_ap_num(&available);
-    }
-    if (result == ESP_OK && available > 0) {
-        scanned_network_count = available > WIFI_SCAN_MAX_RESULTS ? WIFI_SCAN_MAX_RESULTS : available;
-        result = esp_wifi_scan_get_ap_records(&scanned_network_count, scanned_networks);
-    }
-    if (result != ESP_OK || scanned_network_count == 0) {
-        lv_label_set_text(wifi_status_label, localized("NO NETWORKS FOUND", "未找到网络"));
+    uint16_t count=0;wifi_setup_scan_read(NULL,&count,&wifi_scan_revision);
+    wifi_scan_pending=wifi_setup_scan()==ESP_OK;
+    if(!wifi_scan_pending)lv_label_set_text(wifi_status_label,localized("WI-FI BUSY","连接中，请稍后扫描"));
+}
+
+static void wifi_scan_refresh_locked(void)
+{
+    if(!wifi_scan_pending||!wifi_network_list)return;
+    uint32_t revision=wifi_scan_revision;uint16_t count=WIFI_SCAN_MAX_RESULTS;
+    wifi_setup_scan_read(scanned_networks,&count,&revision);
+    if(revision==wifi_scan_revision)return;
+    wifi_scan_revision=revision;wifi_scan_pending=false;scanned_network_count=count;
+    lv_obj_clean(wifi_network_list);
+    if(!count){
+        lv_label_set_text(wifi_status_label, localized("NO 2.4 GHz NETWORKS", "未找到网络，热点请开启 2.4 GHz"));
         return;
     }
 
@@ -2222,6 +2288,7 @@ static void wifi_setup_event_cb(lv_event_t *event)
         wifi_refresh_status_locked();
     } else {
         lv_label_set_text(wifi_setup_message, localized("STARTING...", "正在开启热点..."));
+        lv_label_set_text(wifi_setup_credentials, "");
         lv_obj_add_flag(wifi_setup_qr, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(wifi_setup_panel, LV_OBJ_FLAG_HIDDEN);
         if (wifi_setup_open() != ESP_OK)
@@ -2240,6 +2307,8 @@ static void wifi_setup_refresh_locked(void)
         lv_qrcode_update(wifi_setup_qr,qr,strlen(qr));
         lv_obj_remove_flag(wifi_setup_qr,LV_OBJ_FLAG_HIDDEN);
     }
+    if(s.active)lv_label_set_text_fmt(wifi_setup_credentials,"热点 %s\n密码 %s",s.ssid,s.password);
+    else lv_label_set_text(wifi_setup_credentials,"");
     if (!lv_obj_has_flag(wifi_setup_panel,LV_OBJ_FLAG_HIDDEN)) {
         lv_label_set_text(wifi_setup_message,s.status);
         if (wifi_setup_was_active && !s.active) {
@@ -2729,7 +2798,7 @@ static void create_wifi(lv_obj_t *screen)
     lv_obj_set_style_radius(quick,22,0);
     lv_obj_add_event_cb(quick,wifi_setup_event_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t *quick_label=lv_label_create(quick);
-    lv_label_set_text(quick_label,localized("PHONE SETUP","手机快捷配网"));
+    lv_label_set_text(quick_label,localized("PHONE / WEB LOGIN","手机配网 / 网页认证"));
     lv_obj_set_style_text_font(quick_label,localized_font(&lv_font_montserrat_16),0);
     lv_obj_center(quick_label);
     /* Password overlay must remain above the quick-setup entry. */
@@ -2742,7 +2811,7 @@ static void create_wifi(lv_obj_t *screen)
     lv_obj_set_style_bg_opa(wifi_setup_panel,255,0);
     lv_obj_remove_flag(wifi_setup_panel,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *setup_title=lv_label_create(wifi_setup_panel);
-    lv_label_set_text(setup_title,localized("PHONE SETUP","手机配网"));
+    lv_label_set_text(setup_title,localized("PHONE / WEB LOGIN","手机辅助联网"));
     lv_obj_set_style_text_font(setup_title,localized_title_font(&lv_font_montserrat_20),0);
     lv_obj_align(setup_title,LV_ALIGN_TOP_MID,0,38);
     wifi_setup_qr=lv_qrcode_create(wifi_setup_panel);
@@ -2758,10 +2827,17 @@ static void create_wifi(lv_obj_t *screen)
     lv_obj_set_style_text_font(wifi_setup_message,localized_font(&lv_font_montserrat_16),0);
     lv_obj_align(wifi_setup_message,LV_ALIGN_TOP_MID,0,309);
     lv_label_set_text(wifi_setup_message,"");
+    wifi_setup_credentials=lv_label_create(wifi_setup_panel);
+    lv_obj_set_width(wifi_setup_credentials,370);
+    lv_obj_set_style_text_align(wifi_setup_credentials,LV_TEXT_ALIGN_CENTER,0);
+    lv_obj_set_style_text_font(wifi_setup_credentials,localized_font(&lv_font_montserrat_14),0);
+    lv_obj_set_style_text_color(wifi_setup_credentials,lv_color_hex(0x30435D),0);
+    lv_obj_align(wifi_setup_credentials,LV_ALIGN_TOP_MID,0,334);
+    lv_label_set_text(wifi_setup_credentials,"");
     lv_obj_t *url=lv_label_create(wifi_setup_panel);
     lv_label_set_text(url,"http://192.168.4.1");
     lv_obj_set_style_text_font(url,&lv_font_montserrat_16,0);
-    lv_obj_align(url,LV_ALIGN_TOP_MID,0,365);
+    lv_obj_align(url,LV_ALIGN_TOP_MID,0,378);
     lv_obj_t *stop=lv_button_create(wifi_setup_panel);
     lv_obj_set_size(stop,150,44); lv_obj_align(stop,LV_ALIGN_BOTTOM_MID,0,-24);
     lv_obj_set_style_radius(stop,22,0);
@@ -3073,82 +3149,100 @@ static void create_app_overview(lv_obj_t *screen)
     lv_obj_center(home_icon);
 }
 
+static void friendly_screen(lv_obj_t *root, uint32_t color)
+{
+    lv_obj_set_size(root, WALLPAPER_WIDTH, WALLPAPER_HEIGHT);
+    lv_obj_center(root);
+    lv_obj_set_style_bg_color(root, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(root, 0, 0);
+    lv_obj_set_style_radius(root, 0, 0);
+    lv_obj_set_style_pad_all(root, 0, 0);
+    lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+    create_gesture_layer(root);
+}
+
+static lv_obj_t *friendly_panel(lv_obj_t *parent, int x, int y, int width, int height,
+                                uint32_t color, int radius)
+{
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_pos(panel, x, y);
+    lv_obj_set_size(panel, width, height);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(panel, radius, 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    return panel;
+}
+
+static lv_obj_t *friendly_button(lv_obj_t *parent, const char *text, int x, int y,
+                                 int width, int height, uint32_t color,
+                                 lv_event_cb_t callback, intptr_t action)
+{
+    lv_obj_t *button = lv_button_create(parent);
+    lv_obj_set_pos(button, x, y);
+    lv_obj_set_size(button, width, height);
+    lv_obj_set_style_radius(button, height / 2, 0);
+    lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(button, 0, 0);
+    lv_obj_set_style_shadow_width(button, 0, 0);
+    lv_obj_set_style_pad_all(button, 0, 0);
+    lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, (void *)action);
+    lv_obj_t *label = lv_label_create(button);
+    lv_label_set_text(label, text);
+    lv_obj_set_width(label, width - 20);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(label, localized_font(&lv_font_montserrat_16), 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x30435D), 0);
+    lv_obj_center(label);
+    return button;
+}
+
+static lv_obj_t *friendly_title(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *title = lv_label_create(parent);
+    lv_label_set_text(title, text);
+    lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x30435D), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    return title;
+}
+
+static lv_obj_t *friendly_status(lv_obj_t *parent, lv_obj_t **pill, const char *text)
+{
+    *pill = friendly_panel(parent, 70, 72, 326, 58, 0xF1F4F8, 29);
+    lv_obj_t *label = lv_label_create(*pill);
+    lv_label_set_text(label, text);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_size(label, 294, 44);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(label, localized_font(&lv_font_montserrat_14), 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x30435D), 0);
+    lv_obj_center(label);
+    return label;
+}
+
 static void create_remote(lv_obj_t *screen)
 {
     remote_view = lv_obj_create(screen);
-    lv_obj_set_size(remote_view, WALLPAPER_WIDTH, WALLPAPER_HEIGHT);
-    lv_obj_center(remote_view);
-    lv_obj_set_style_bg_color(remote_view, theme_background_top(), 0);
-    lv_obj_set_style_bg_grad_color(remote_view, theme_background_bottom(), 0);
-    lv_obj_set_style_bg_grad_dir(remote_view, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_width(remote_view, 0, 0);
-    lv_obj_set_style_radius(remote_view, 0, 0);
-    lv_obj_set_style_pad_all(remote_view, 0, 0);
-    lv_obj_remove_flag(remote_view, LV_OBJ_FLAG_SCROLLABLE);
-    create_gesture_layer(remote_view);
+    friendly_screen(remote_view, 0xF8FBFF);
+    friendly_title(remote_view, localized("ONLINE VOICE", "联网语音"));
+    remote_status_label = friendly_status(remote_view, &remote_status_pill,
+        localized_remote_status(voice_input_status()));
+    create_voice_wave(remote_view, &remote_voice_wave, 155, 0x56C4D8);
 
-    lv_obj_t *title = lv_label_create(remote_view);
-    lv_label_set_text(title, localized("ONLINE VOICE", "联网语音"));
-    lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xE7F8FF), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
-
-    remote_status_label = lv_label_create(remote_view);
-    lv_label_set_text(remote_status_label,
-                      localized_remote_status(voice_input_status()));
-    lv_label_set_long_mode(remote_status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_size(remote_status_label, 350, 76);
-    lv_obj_set_style_text_align(remote_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(remote_status_label,
-                               localized_font(&lv_font_montserrat_12), 0);
-    lv_obj_set_style_text_color(remote_status_label, lv_color_hex(0x9DE9FF), 0);
-    lv_obj_align(remote_status_label, LV_ALIGN_TOP_MID, 0, 70);
-
-    create_voice_wave(remote_view, &remote_voice_wave, 150, 0x0A84FF);
-
-    lv_obj_t *voice_button = lv_button_create(remote_view);
+    lv_obj_t *voice_button = friendly_button(remote_view,
+        localized("START RECORDING", "开始录音"), 83, 190, 300, 64, 0x6ED8B6,
+        remote_action_event_cb, 1);
     record_controls[0] = voice_button;
-    lv_obj_set_size(voice_button, 150, 96);
-    lv_obj_align(voice_button, LV_ALIGN_TOP_MID, -82, 166);
-    lv_obj_set_style_radius(voice_button, 34, 0);
-    lv_obj_set_style_bg_color(voice_button, lv_color_hex(use_ironman_theme ? 0xA22814 : 0x167C9E), 0);
-    lv_obj_set_style_bg_grad_color(voice_button, lv_color_hex(use_ironman_theme ? 0xF0A420 : 0x23B889), 0);
-    lv_obj_set_style_bg_grad_dir(voice_button, LV_GRAD_DIR_VER, 0);
-    lv_obj_add_event_cb(voice_button, remote_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
-    lv_obj_t *voice_label = lv_label_create(voice_button);
-    lv_label_set_text(voice_label, localized("START\nRECORDING", "开始录音"));
-    lv_obj_set_style_text_align(voice_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(voice_label, localized_font(&lv_font_montserrat_14), 0);
-    lv_obj_center(voice_label);
-
-    lv_obj_t *confirm_button = lv_button_create(remote_view);
+    lv_obj_t *confirm_button = friendly_button(remote_view,
+        localized("STOP AND RECOGNIZE", "停止并识别"), 83, 270, 300, 64, 0x73A7F6,
+        remote_action_event_cb, 2);
     finish_controls[0] = confirm_button;
-    lv_obj_set_size(confirm_button, 150, 96);
-    lv_obj_align(confirm_button, LV_ALIGN_TOP_MID, 82, 166);
-    lv_obj_set_style_radius(confirm_button, 34, 0);
-    lv_obj_set_style_bg_color(confirm_button, lv_color_hex(use_ironman_theme ? 0x7C1A12 : 0x244980), 0);
-    lv_obj_set_style_bg_grad_color(confirm_button, lv_color_hex(use_ironman_theme ? 0xE0611A : 0x526CCE), 0);
-    lv_obj_set_style_bg_grad_dir(confirm_button, LV_GRAD_DIR_VER, 0);
-    lv_obj_add_event_cb(confirm_button, remote_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)2);
-    lv_obj_t *confirm_label = lv_label_create(confirm_button);
-    lv_label_set_text(confirm_label, localized("STOP AND\nRECOGNIZE", "停止并识别"));
-    lv_obj_set_style_text_align(confirm_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(confirm_label, localized_font(&lv_font_montserrat_14), 0);
-    lv_obj_center(confirm_label);
-
-    lv_obj_t *home_button = lv_button_create(remote_view);
-    lv_obj_set_size(home_button, 52, 52);
-    lv_obj_align(home_button, LV_ALIGN_BOTTOM_MID, 0, -16);
-    lv_obj_set_style_radius(home_button, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(home_button, lv_color_hex(0x071524), 0);
-    lv_obj_set_style_bg_opa(home_button, LV_OPA_80, 0);
-    lv_obj_set_style_border_width(home_button, 1, 0);
-    lv_obj_set_style_border_color(home_button, theme_accent(), 0);
-    lv_obj_add_event_cb(home_button, remote_home_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *home_icon = lv_label_create(home_button);
-    lv_label_set_text(home_icon, LV_SYMBOL_HOME);
-    lv_obj_set_style_text_color(home_icon, lv_color_hex(0xD9F7FF), 0);
-    lv_obj_center(home_icon);
+    friendly_button(remote_view, localized("HOME", "返回桌面"), 151, 390, 164, 52,
+                    0xE6ECF8, remote_home_event_cb, 0);
 }
 
 static void music_home_event_cb(lv_event_t *event)
@@ -3161,291 +3255,110 @@ static void music_home_event_cb(lv_event_t *event)
 static void create_music(lv_obj_t *screen)
 {
     music_view = lv_obj_create(screen);
-    lv_obj_set_size(music_view, WALLPAPER_WIDTH, WALLPAPER_HEIGHT);
-    lv_obj_center(music_view);
-    lv_obj_set_style_bg_color(music_view, lv_color_hex(0x150828), 0);
-    lv_obj_set_style_bg_grad_color(music_view, lv_color_hex(0x4C145D), 0);
-    lv_obj_set_style_bg_grad_dir(music_view, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_width(music_view, 0, 0);
-    lv_obj_set_style_radius(music_view, 0, 0);
-    lv_obj_set_style_pad_all(music_view, 0, 0);
-    lv_obj_remove_flag(music_view, LV_OBJ_FLAG_SCROLLABLE);
-    create_gesture_layer(music_view);
+    friendly_screen(music_view, 0xFBF8FF);
+    friendly_title(music_view, localized("MUSIC STUDIO", "音乐创作"));
+    music_status_label = friendly_status(music_view, &music_status_pill,
+        localized_remote_status(music_input_status()));
+    create_voice_wave(music_view, &music_voice_wave, 151, 0xA37AF4);
 
-    lv_obj_t *title = lv_label_create(music_view);
-    lv_label_set_text(title, localized("MUSIC STUDIO", "音乐创作"));
-    lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xF8D5FF), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
-
-    music_status_label = lv_label_create(music_view);
-    lv_label_set_text(music_status_label, localized_remote_status(music_input_status()));
-    lv_label_set_long_mode(music_status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_size(music_status_label, 346, 60);
-    lv_obj_set_style_text_align(music_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(music_status_label, localized_font(&lv_font_montserrat_14), 0);
-    lv_obj_set_style_text_color(music_status_label, lv_color_hex(0xF0B8FF), 0);
-    lv_obj_align(music_status_label, LV_ALIGN_TOP_MID, 0, 78);
-
-    create_voice_wave(music_view, &music_voice_wave, 144, 0xAF52DE);
-
-    lv_obj_t *record_button = lv_button_create(music_view);
+    lv_obj_t *record_button = friendly_button(music_view,
+        localized("SPEAK MUSIC IDEA", "说出音乐想法"), 83, 184, 300, 60, 0xA37AF4,
+        music_action_event_cb, 1);
     record_controls[1] = record_button;
-    lv_obj_set_size(record_button, 150, 96);
-    lv_obj_align(record_button, LV_ALIGN_TOP_MID, -82, 160);
-    lv_obj_set_style_radius(record_button, 34, 0);
-    lv_obj_set_style_bg_color(record_button, lv_color_hex(0x6D28D9), 0);
-    lv_obj_set_style_bg_grad_color(record_button, lv_color_hex(0xC026D3), 0);
-    lv_obj_set_style_bg_grad_dir(record_button, LV_GRAD_DIR_VER, 0);
-    lv_obj_add_event_cb(record_button, music_action_event_cb, LV_EVENT_CLICKED,
-                        (void *)(intptr_t)1);
-    lv_obj_t *record_label = lv_label_create(record_button);
-    lv_label_set_text(record_label, localized("SPEAK\nIDEA", "开始录音"));
-    lv_obj_set_style_text_align(record_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(record_label, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(record_label);
-
-    lv_obj_t *finish_button = lv_button_create(music_view);
+    lv_obj_t *finish_button = friendly_button(music_view,
+        localized("CREATE MUSIC", "生成音乐"), 83, 256, 300, 60, 0xD9D3FF,
+        music_action_event_cb, 2);
     finish_controls[1] = finish_button;
-    lv_obj_set_size(finish_button, 150, 96);
-    lv_obj_align(finish_button, LV_ALIGN_TOP_MID, 82, 160);
-    lv_obj_set_style_radius(finish_button, 34, 0);
-    lv_obj_set_style_bg_color(finish_button, lv_color_hex(0x312E81), 0);
-    lv_obj_set_style_bg_grad_color(finish_button, lv_color_hex(0x7E22CE), 0);
-    lv_obj_set_style_bg_grad_dir(finish_button, LV_GRAD_DIR_VER, 0);
-    lv_obj_add_event_cb(finish_button, music_action_event_cb, LV_EVENT_CLICKED,
-                        (void *)(intptr_t)2);
-    lv_obj_t *finish_label = lv_label_create(finish_button);
-    lv_label_set_text(finish_label, localized("STOP AND\nCREATE", "生成音乐"));
-    lv_obj_set_style_text_align(finish_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(finish_label, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(finish_label);
-
-    lv_obj_t *play_button = lv_button_create(music_view);
+    lv_obj_t *play_button = friendly_button(music_view,
+        localized("PLAY", "播放音乐"), 83, 330, 144, 58, 0xFFE0A8,
+        music_action_event_cb, 3);
     music_play_button = play_button;
-    lv_obj_set_size(play_button, 70, 70);
-    lv_obj_align(play_button, LV_ALIGN_BOTTOM_MID, -62, -26);
-    lv_obj_set_style_radius(play_button, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(play_button, lv_color_hex(0xC026D3), 0);
-    lv_obj_add_event_cb(play_button, music_action_event_cb, LV_EVENT_CLICKED,
-                        (void *)(intptr_t)3);
-    lv_obj_t *play_icon = lv_label_create(play_button);
-    lv_label_set_text(play_icon, LV_SYMBOL_PLAY);
-    lv_obj_set_style_text_font(play_icon, &lv_font_montserrat_20, 0);
-    lv_obj_center(play_icon);
-
-    lv_obj_t *library = lv_button_create(music_view);
-    lv_obj_set_size(library, 250, 52);
-    lv_obj_align(library, LV_ALIGN_TOP_MID, 0, 286);
-    lv_obj_add_event_cb(library, music_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)4);
-    lv_obj_t *library_name = lv_label_create(library);
-    lv_label_set_text(library_name, localized("SAVED WORKS", "作品库 · 已保存音乐"));
-    lv_obj_set_style_text_font(library_name, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(library_name);
-
-    lv_obj_t *home_button = lv_button_create(music_view);
-    lv_obj_set_size(home_button, 52, 52);
-    lv_obj_align(home_button, LV_ALIGN_BOTTOM_MID, 44, -35);
-    lv_obj_set_style_radius(home_button, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(home_button, lv_color_hex(0x2E1065), 0);
-    lv_obj_set_style_border_width(home_button, 1, 0);
-    lv_obj_set_style_border_color(home_button, lv_color_hex(0xF0ABFC), 0);
-    lv_obj_add_event_cb(home_button, music_home_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *home_icon = lv_label_create(home_button);
-    lv_label_set_text(home_icon, LV_SYMBOL_HOME);
-    lv_obj_center(home_icon);
+    friendly_button(music_view, localized("SAVED WORKS", "作品库"), 239, 330, 144, 58,
+                    0xD7E8FF, music_action_event_cb, 4);
+    friendly_button(music_view, localized("HOME", "返回桌面"), 151, 402, 164, 44,
+                    0xE6ECF8, music_home_event_cb, 0);
 }
 
 static void create_radio(lv_obj_t *screen)
 {
     static const char *station_names[] = {"星空", "极光", "能量"};
-    static const uint32_t station_colors[] = {0x273C8E, 0x0F766E, 0xB45309};
+    static const uint32_t station_colors[] = {0xD9D3FF, 0xC9F0E4, 0xFFE0A8};
 
     radio_view = lv_obj_create(screen);
-    lv_obj_set_size(radio_view, WALLPAPER_WIDTH, WALLPAPER_HEIGHT);
-    lv_obj_center(radio_view);
-    lv_obj_set_style_bg_color(radio_view, lv_color_hex(0x07112D), 0);
-    lv_obj_set_style_bg_grad_color(radio_view, lv_color_hex(0x1E1B4B), 0);
-    lv_obj_set_style_bg_grad_dir(radio_view, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_width(radio_view, 0, 0);
-    lv_obj_set_style_radius(radio_view, 0, 0);
-    lv_obj_set_style_pad_all(radio_view, 0, 0);
-    lv_obj_remove_flag(radio_view, LV_OBJ_FLAG_SCROLLABLE);
-    create_gesture_layer(radio_view);
-
-    lv_obj_t *title = lv_label_create(radio_view);
-    lv_label_set_text(title, localized("AI RADIO", "AI 电台"));
-    lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xC4B5FD), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
-
-    radio_status_label = lv_label_create(radio_view);
-    lv_label_set_text(radio_status_label, localized("PICK A CHANNEL, THEN SPEAK", "选择频道，再说感受"));
-    lv_label_set_long_mode(radio_status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_size(radio_status_label, 350, 48);
-    lv_obj_set_style_text_align(radio_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(radio_status_label, localized_font(&lv_font_montserrat_14), 0);
-    lv_obj_set_style_text_color(radio_status_label, lv_color_hex(0xDDD6FE), 0);
-    lv_obj_align(radio_status_label, LV_ALIGN_TOP_MID, 0, 70);
+    friendly_screen(radio_view, 0xF7FAFF);
+    friendly_title(radio_view, localized("AI RADIO", "AI 电台"));
+    radio_status_label = friendly_status(radio_view, &radio_status_pill,
+        localized("PICK A CHANNEL, THEN SPEAK", "选择频道，再说感受"));
 
     for (int i = 0; i < 3; ++i) {
         lv_obj_t *station = lv_button_create(radio_view);
-        lv_obj_set_size(station, 92, 64);
-        lv_obj_set_pos(station, 77 + i * 108, 132);
-        lv_obj_set_style_radius(station, 23, 0);
+        lv_obj_set_size(station, 100, 60);
+        lv_obj_set_pos(station, 71 + i * 112, 142);
+        lv_obj_set_style_radius(station, 30, 0);
         lv_obj_set_style_bg_color(station, lv_color_hex(station_colors[i]), 0);
-        lv_obj_set_style_border_width(station, 1, 0);
-        lv_obj_set_style_border_color(station, lv_color_hex(0xC4B5FD), 0);
+        lv_obj_set_style_border_width(station, 0, 0);
+        lv_obj_set_style_shadow_width(station, 0, 0);
         radio_station_buttons[i] = station;
         lv_obj_add_event_cb(station, radio_station_event_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)i);
         lv_obj_t *name = lv_label_create(station);
         lv_label_set_text(name, localized(i == 0 ? "SKY" : i == 1 ? "AURORA" : "ENERGY",
                                           station_names[i]));
-        lv_obj_set_style_text_font(name, localized_font(&lv_font_montserrat_12), 0);
+        lv_obj_set_style_text_font(name, localized_font(&lv_font_montserrat_16), 0);
+        lv_obj_set_style_text_color(name, lv_color_hex(0x30435D), 0);
         lv_obj_center(name);
     }
 
-    create_voice_wave(radio_view, &radio_voice_wave, 210, 0x5856D6);
+    create_voice_wave(radio_view, &radio_voice_wave, 216, 0x73A7F6);
 
-    lv_obj_t *record = lv_button_create(radio_view);
+    lv_obj_t *record = friendly_button(radio_view, localized("SPEAK MOOD", "说出想法"),
+        83, 238, 144, 62, 0xA37AF4, radio_action_event_cb, 1);
     record_controls[2] = record;
-    lv_obj_set_size(record, 138, 88);
-    lv_obj_align(record, LV_ALIGN_TOP_MID, -76, 224);
-    lv_obj_set_style_radius(record, 30, 0);
-    lv_obj_set_style_bg_color(record, lv_color_hex(0x6D28D9), 0);
-    lv_obj_add_event_cb(record, radio_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
-    lv_obj_t *record_name = lv_label_create(record);
-    lv_label_set_text(record_name, localized("SPEAK\nMOOD", "说出想法"));
-    lv_obj_set_style_text_align(record_name, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(record_name, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(record_name);
-
-    lv_obj_t *stop = lv_button_create(radio_view);
+    lv_obj_t *stop = friendly_button(radio_view, localized("CREATE TRACK", "生成频道音乐"),
+        239, 238, 144, 62, 0xD9D3FF, radio_action_event_cb, 2);
     finish_controls[2] = stop;
-    lv_obj_set_size(stop, 138, 88);
-    lv_obj_align(stop, LV_ALIGN_TOP_MID, 76, 224);
-    lv_obj_set_style_radius(stop, 30, 0);
-    lv_obj_set_style_bg_color(stop, lv_color_hex(0x312E81), 0);
-    lv_obj_add_event_cb(stop, radio_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)2);
-    lv_obj_t *stop_name = lv_label_create(stop);
-    lv_label_set_text(stop_name, localized("STOP\nCREATE", "生成音乐"));
-    lv_obj_set_style_text_align(stop_name, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(stop_name, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(stop_name);
-
-    lv_obj_t *play = lv_button_create(radio_view);
+    lv_obj_t *play = friendly_button(radio_view, localized("PLAY", "播放频道"),
+        83, 314, 144, 58, 0xFFE0A8, radio_action_event_cb, 3);
     radio_play_button = play;
-    lv_obj_set_size(play, 62, 62);
-    lv_obj_align(play, LV_ALIGN_BOTTOM_MID, -48, -22);
-    lv_obj_set_style_radius(play, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(play, lv_color_hex(0x8B5CF6), 0);
-    lv_obj_add_event_cb(play, radio_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)3);
-    lv_obj_t *play_icon = lv_label_create(play);
-    lv_label_set_text(play_icon, LV_SYMBOL_PLAY);
-    lv_obj_center(play_icon);
-
-    lv_obj_t *library = lv_button_create(radio_view);
-    lv_obj_set_size(library, 206, 42);
-    lv_obj_align(library, LV_ALIGN_TOP_MID, 0, 330);
-    lv_obj_add_event_cb(library, radio_action_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)4);
-    lv_obj_t *library_name = lv_label_create(library);
-    lv_label_set_text(library_name, localized("SAVED WORKS", "作品库 · 全部音乐"));
-    lv_obj_set_style_text_font(library_name, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(library_name);
-
-    lv_obj_t *home = lv_button_create(radio_view);
-    lv_obj_set_size(home, 52, 52);
-    lv_obj_align(home, LV_ALIGN_BOTTOM_MID, 44, -27);
-    lv_obj_set_style_radius(home, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(home, lv_color_hex(0x171033), 0);
-    lv_obj_add_event_cb(home, radio_home_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *home_icon = lv_label_create(home);
-    lv_label_set_text(home_icon, LV_SYMBOL_HOME);
-    lv_obj_center(home_icon);
+    friendly_button(radio_view, localized("SAVED WORKS", "作品库"), 239, 314, 144, 58,
+                    0xD7E8FF, radio_action_event_cb, 4);
+    friendly_button(radio_view, localized("HOME", "返回桌面"), 151, 398, 164, 46,
+                    0xE6ECF8, radio_home_event_cb, 0);
 }
 
 static void create_wallpaper_studio(lv_obj_t *screen)
 {
     wallpaper_studio_view = lv_obj_create(screen);
-    lv_obj_set_size(wallpaper_studio_view, WALLPAPER_WIDTH, WALLPAPER_HEIGHT);
-    lv_obj_center(wallpaper_studio_view);
-    lv_obj_set_style_bg_color(wallpaper_studio_view, lv_color_hex(0x041A1F), 0);
-    lv_obj_set_style_bg_grad_color(wallpaper_studio_view, lv_color_hex(0x063C55), 0);
-    lv_obj_set_style_bg_grad_dir(wallpaper_studio_view, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_width(wallpaper_studio_view, 0, 0);
-    lv_obj_set_style_radius(wallpaper_studio_view, 0, 0);
-    lv_obj_set_style_pad_all(wallpaper_studio_view, 0, 0);
-    lv_obj_remove_flag(wallpaper_studio_view, LV_OBJ_FLAG_SCROLLABLE);
-    create_gesture_layer(wallpaper_studio_view);
-
-    lv_obj_t *title = lv_label_create(wallpaper_studio_view);
-    lv_label_set_text(title, localized("LIVE WALLPAPER", "动态壁纸"));
-    lv_obj_set_style_text_font(title, localized_title_font(&lv_font_montserrat_20), 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xA5F3FC), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
-
-    wallpaper_studio_status_label = lv_label_create(wallpaper_studio_view);
-    lv_label_set_text(wallpaper_studio_status_label,
-                      localized_remote_status(wallpaper_input_status()));
-    lv_label_set_long_mode(wallpaper_studio_status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_size(wallpaper_studio_status_label, 350, 62);
-    lv_obj_set_style_text_align(wallpaper_studio_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(wallpaper_studio_status_label,
-                               localized_font(&lv_font_montserrat_14), 0);
-    lv_obj_set_style_text_color(wallpaper_studio_status_label, lv_color_hex(0xCFFAFE), 0);
-    lv_obj_align(wallpaper_studio_status_label, LV_ALIGN_TOP_MID, 0, 80);
+    friendly_screen(wallpaper_studio_view, 0xF4FBFC);
+    friendly_title(wallpaper_studio_view, localized("LIVE WALLPAPER", "动态壁纸"));
+    wallpaper_studio_status_label = friendly_status(wallpaper_studio_view,
+        &wallpaper_status_pill, localized_remote_status(wallpaper_input_status()));
 
     lv_obj_t *orb = lv_obj_create(wallpaper_studio_view);
-    lv_obj_set_size(orb, 150, 150);
-    lv_obj_align(orb, LV_ALIGN_CENTER, 0, -5);
+    lv_obj_set_size(orb, 112, 112);
+    lv_obj_align(orb, LV_ALIGN_TOP_MID, 0, 142);
     lv_obj_set_style_radius(orb, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(orb, lv_color_hex(0x0A84FF), 0);
     lv_obj_set_style_bg_grad_dir(orb, LV_GRAD_DIR_NONE, 0);
-    lv_obj_set_style_bg_opa(orb, LV_OPA_30, 0);
-    lv_obj_set_style_border_width(orb, 1, 0);
-    lv_obj_set_style_border_color(orb, lv_color_hex(0x5AC8FA), 0);
+    lv_obj_set_style_bg_opa(orb, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(orb, 0, 0);
     lv_obj_remove_flag(orb, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    create_voice_wave(wallpaper_studio_view, &wallpaper_voice_wave, 232, 0x0A84FF);
+    create_voice_wave(wallpaper_studio_view, &wallpaper_voice_wave, 194, 0x56C4D8);
 
-    wallpaper_record_button = lv_button_create(wallpaper_studio_view);
+    wallpaper_record_button = friendly_button(wallpaper_studio_view,
+        localized("SPEAK SCENE", "描述画面"), 83, 254, 144, 68, 0x6ED8B6,
+        wallpaper_studio_action_event_cb, 1);
     record_controls[3] = wallpaper_record_button;
-    lv_obj_set_size(wallpaper_record_button, 138, 86);
-    lv_obj_align(wallpaper_record_button, LV_ALIGN_BOTTOM_MID, -76, -50);
-    lv_obj_set_style_radius(wallpaper_record_button, 30, 0);
-    lv_obj_set_style_bg_color(wallpaper_record_button, lv_color_hex(0x0E7490), 0);
-    lv_obj_add_event_cb(wallpaper_record_button, wallpaper_studio_action_event_cb, LV_EVENT_CLICKED,
-                        (void *)(intptr_t)1);
-    wallpaper_record_label = lv_label_create(wallpaper_record_button);
-    lv_label_set_text(wallpaper_record_label, localized("SPEAK\nSCENE", "描述画面"));
-    lv_obj_set_style_text_align(wallpaper_record_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(wallpaper_record_label, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(wallpaper_record_label);
+    wallpaper_record_label = lv_obj_get_child(wallpaper_record_button, 0);
 
-    wallpaper_finish_button = lv_button_create(wallpaper_studio_view);
+    wallpaper_finish_button = friendly_button(wallpaper_studio_view,
+        localized("CREATE WALLPAPER", "生成壁纸"), 239, 254, 144, 68, 0xD7E8FF,
+        wallpaper_studio_action_event_cb, 2);
     finish_controls[3] = wallpaper_finish_button;
-    lv_obj_set_size(wallpaper_finish_button, 138, 86);
-    lv_obj_align(wallpaper_finish_button, LV_ALIGN_BOTTOM_MID, 76, -50);
-    lv_obj_set_style_radius(wallpaper_finish_button, 30, 0);
-    lv_obj_set_style_bg_color(wallpaper_finish_button, lv_color_hex(0x155E75), 0);
-    lv_obj_add_event_cb(wallpaper_finish_button, wallpaper_studio_action_event_cb, LV_EVENT_CLICKED,
-                        (void *)(intptr_t)2);
-    wallpaper_finish_label = lv_label_create(wallpaper_finish_button);
-    lv_label_set_text(wallpaper_finish_label, localized("STOP\nCREATE", "生成壁纸"));
-    lv_obj_set_style_text_align(wallpaper_finish_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(wallpaper_finish_label, localized_font(&lv_font_montserrat_16), 0);
-    lv_obj_center(wallpaper_finish_label);
-
-    lv_obj_t *home = lv_button_create(wallpaper_studio_view);
-    lv_obj_set_size(home, 46, 46);
-    lv_obj_align(home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_radius(home, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(home, lv_color_hex(0x083344), 0);
-    lv_obj_add_event_cb(home, wallpaper_studio_home_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *home_icon = lv_label_create(home);
-    lv_label_set_text(home_icon, LV_SYMBOL_HOME);
-    lv_obj_center(home_icon);
+    wallpaper_finish_label = lv_obj_get_child(wallpaper_finish_button, 0);
+    friendly_button(wallpaper_studio_view, localized("HOME", "返回桌面"), 151, 390, 164, 52,
+                    0xE6ECF8, wallpaper_studio_home_event_cb, 0);
 }
 
 static void create_bluetooth(lv_obj_t *screen)
@@ -4068,6 +3981,11 @@ static void weather_task(void *arg)
 {
     (void)arg;
     TickType_t next_attempt = 0;
+    weather_data_t cached;
+    if(snapshot_load("/wallpaper/weather-v1",&cached,sizeof(cached),NULL)==sizeof(cached)){
+        cached.cached=true;
+        taskENTER_CRITICAL(&weather_data_mux);pending_weather_data=cached;weather_data_pending=true;taskEXIT_CRITICAL(&weather_data_mux);
+    }
 
     for (;;) {
         TickType_t now = xTaskGetTickCount();
@@ -4080,6 +3998,8 @@ static void weather_task(void *arg)
             weather_data_t weather;
             esp_err_t result = download_weather(&weather);
             if (result == ESP_OK) {
+                weather.saved_at=(uint32_t)time(NULL);weather.cached=false;
+                snapshot_save("/wallpaper/weather-v1",&weather,sizeof(weather),weather.saved_at);
                 taskENTER_CRITICAL(&weather_data_mux);
                 pending_weather_data = weather;
                 weather_data_pending = true;
@@ -4217,6 +4137,12 @@ static void quota_task(void *arg)
 {
     (void)arg;
     TickType_t next_attempt = 0;
+    quota_data_t *cached=heap_caps_malloc(sizeof(*cached),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(cached&&snapshot_load("/wallpaper/quota-v1",cached,sizeof(*cached),NULL)==sizeof(*cached)){
+        cached->cached=true;
+        taskENTER_CRITICAL(&quota_data_mux);pending_quota_data=*cached;quota_data_pending=true;taskEXIT_CRITICAL(&quota_data_mux);
+    }
+    free(cached);
     for (;;) {
         TickType_t now = xTaskGetTickCount();
         bool due = quota_refresh_requested || next_attempt == 0 ||
@@ -4228,6 +4154,7 @@ static void quota_task(void *arg)
             quota_data_t quota;
             esp_err_t result = download_quota(&quota);
             if (result == ESP_OK) {
+                quota.cached=false;snapshot_save("/wallpaper/quota-v1",&quota,sizeof(quota),(uint32_t)time(NULL));
                 taskENTER_CRITICAL(&quota_data_mux);
                 pending_quota_data = quota;
                 quota_data_pending = true;
@@ -4344,6 +4271,12 @@ static void codex_reset_task(void *arg)
 {
     (void)arg;
     TickType_t next_attempt = 0;
+    codex_reset_data_t *cached=heap_caps_malloc(sizeof(*cached),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(cached&&snapshot_load("/wallpaper/reset-v1",cached,sizeof(*cached),NULL)==sizeof(*cached)){
+        cached->cached=true;cached->active=false;cached->watch=false;cached->remember_signal=false;cached->stale=true;cached->forecast_available=false;
+        taskENTER_CRITICAL(&codex_reset_data_mux);pending_codex_reset_data=*cached;codex_reset_data_pending=true;taskEXIT_CRITICAL(&codex_reset_data_mux);
+    }
+    free(cached);
     for (;;) {
         TickType_t now = xTaskGetTickCount();
         bool due = codex_reset_refresh_requested || next_attempt == 0 ||
@@ -4355,6 +4288,7 @@ static void codex_reset_task(void *arg)
             codex_reset_data_t *data = heap_caps_malloc(sizeof(*data), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             esp_err_t result = data ? download_codex_reset(data) : ESP_ERR_NO_MEM;
             if (result == ESP_OK) {
+                data->cached=false;snapshot_save("/wallpaper/reset-v1",data,sizeof(*data),(uint32_t)time(NULL));
                 taskENTER_CRITICAL(&codex_reset_data_mux);
                 pending_codex_reset_data = *data;
                 codex_reset_data_pending = true;
@@ -4439,25 +4373,46 @@ static esp_err_t axp2101_write(uint8_t reg, uint8_t value)
 static void power_button_task(void *arg)
 {
     (void)arg;
+    bool short_press_pending = false;
+    TickType_t first_short_press_at = 0;
+
     for (;;) {
+        TickType_t now = xTaskGetTickCount();
         uint8_t status = 0;
         if (axp2101_read(AXP2101_INTSTS2, &status) == ESP_OK && status != 0) {
             axp2101_write(AXP2101_INTSTS2, status);
             if ((status & AXP2101_PKEY_LONG_MASK) != 0) {
+                short_press_pending = false;
                 requested_screen_power = 0;
                 ESP_LOGI(TAG, "PWR long press: request screen off");
             } else if ((status & AXP2101_PKEY_SHORT_MASK) != 0) {
                 if (!screen_on) {
+                    short_press_pending = false;
                     requested_screen_power = 1;
                     ESP_LOGI(TAG, "PWR short press: request screen on");
                     vTaskDelay(pdMS_TO_TICKS(50));
                     continue;
                 }
-                bool show_clock = current_app_view != APP_VIEW_CLOCK;
-                show_view(show_clock ? APP_VIEW_CLOCK : APP_VIEW_DESKTOP);
-                ESP_LOGI(TAG, "PWR short press: request %s",
-                         show_clock ? "clock" : "desktop");
+                if (short_press_pending &&
+                    pdTICKS_TO_MS(now - first_short_press_at) <= POWER_BUTTON_DOUBLE_PRESS_MS) {
+                    short_press_pending = false;
+                    requested_screen_power = 0;
+                    ESP_LOGI(TAG, "PWR double press: request screen off");
+                } else {
+                    short_press_pending = true;
+                    first_short_press_at = now;
+                }
             }
+        }
+
+        if (short_press_pending &&
+            pdTICKS_TO_MS(xTaskGetTickCount() - first_short_press_at) >
+                POWER_BUTTON_DOUBLE_PRESS_MS) {
+            short_press_pending = false;
+            bool show_clock = current_app_view != APP_VIEW_CLOCK;
+            show_view(show_clock ? APP_VIEW_CLOCK : APP_VIEW_DESKTOP);
+            ESP_LOGI(TAG, "PWR short press: request %s",
+                     show_clock ? "clock" : "desktop");
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -4505,6 +4460,7 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_vfs_spiffs_register(&spiffs));
     ESP_ERROR_CHECK(avatar_store_init());
+    music_input_restore_cached();
 
     for (int i = 0; i < 2; ++i) {
         download_buffers[i] = heap_caps_malloc(WALLPAPER_BYTES,

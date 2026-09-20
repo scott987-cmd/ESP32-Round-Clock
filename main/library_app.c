@@ -3,17 +3,21 @@
 #include "music_input.h"
 #include "wallpaper_input.h"
 #include "story_app.h"
+#include "snapshot_store.h"
+#include "wifi_setup.h"
+#include "src/misc/cache/instance/lv_image_cache.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {char id[33],kind[16],title[241],date[32];bool favorite,selected,thumbnail;} item_t;
 typedef struct {item_t items[6];int count,offset;bool more,trash,offline,music_only;} page_t;
 typedef struct {int type,offset;bool trash,value,music_only;char id[33],action[16];} request_t;
-static lv_obj_t *view,*heading,*status,*title_label,*date_label,*preview,*prev,*next,*favorite,*use,*remove_button,*confirm,*kind_label;
+static lv_obj_t *view,*heading,*status,*title_label,*date_label,*preview,*prev,*next,*favorite,*use,*remove_button,*confirm,*trash_toggle,*kind_label;
 static const lv_font_t *body_font,*title_font;
 static void (*go_home)(void);
 static void (*go_story)(void);
@@ -24,6 +28,7 @@ static uint8_t *thumbnail,*incoming_thumb;
 static lv_image_dsc_t image;
 static char thumb_id[33],incoming_id[33],message[100]="正在连接作品库";
 static bool active,busy,finished,success,deleted_confirmation;
+static bool preview_ready;
 static bool music_was_playing;
 static bool next_music_only,music_only,reload_on_finish;
 static int item_index,last_type;
@@ -46,9 +51,10 @@ static lv_obj_t *button(const char *text,int x,int y,int w,lv_event_cb_t callbac
 }
 static void hidden(lv_obj_t *o,bool hide) {if(hide)lv_obj_add_flag(o,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(o,LV_OBJ_FLAG_HIDDEN);}
 static void set_button(lv_obj_t *o,const char *text) {lv_label_set_text(lv_obj_get_child(o,0),text);}
-static void parse_page(page_t *out,const char *json)
+static bool parse_page(page_t *out,const char *json)
 {
-    cJSON *root=cJSON_Parse(json);if(!root)return;
+    cJSON *root=cJSON_Parse(json);
+    if(!cJSON_IsObject(root)||!cJSON_IsArray(cJSON_GetObjectItem(root,"items"))){cJSON_Delete(root);return false;}
     out->more=flag(root,"more");out->trash=flag(root,"trash");cJSON *offset=cJSON_GetObjectItem(root,"offset");out->offset=cJSON_IsNumber(offset)?offset->valueint:0;
     cJSON *row;cJSON_ArrayForEach(row,cJSON_GetObjectItem(root,"items")) {
         if(out->count>=6)break;
@@ -57,7 +63,7 @@ static void parse_page(page_t *out,const char *json)
         strlcpy(i->id,id,sizeof(i->id));strlcpy(i->kind,str(row,"kind"),sizeof(i->kind));strlcpy(i->title,str(row,"title"),sizeof(i->title));
         strlcpy(i->date,str(row,"dateLabel"),sizeof(i->date));i->favorite=flag(row,"favorite");i->selected=flag(row,"selected");i->thumbnail=flag(row,"thumbnail");out->count++;
     }
-    cJSON_Delete(root);
+    cJSON_Delete(root);return true;
 }
 static void worker(void *unused)
 {
@@ -65,22 +71,40 @@ static void worker(void *unused)
     size_t capacity=r.type==2?32769:8192;uint8_t *data=heap_caps_calloc(1,capacity,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     bool ok=false;page_t *new_page=NULL;
     if(data) {
+        char cache[96];snprintf(cache,sizeof(cache),"/wallpaper/lib-v1-%d-%d-%d",r.music_only,r.trash,r.offset);
+        bool cacheable=r.type==1&&r.offset>=0&&r.offset<24;
+        if(cacheable){
+            length=snapshot_load(cache,data,capacity-1,NULL);
+            if(!length&&r.offset==0&&!r.trash){
+                FILE *f=fopen(r.music_only?"/wallpaper/library-music.json":"/wallpaper/library.json","rb");
+                if(f){length=fread(data,1,capacity-1,f);fclose(f);}
+            }
+            data[length]=0;
+            new_page=heap_caps_calloc(1,sizeof(page_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+            if(new_page&&(!length||!parse_page(new_page,(char *)data)||new_page->offset!=r.offset||new_page->trash!=r.trash)){free(new_page);new_page=NULL;}
+            if(new_page){
+                new_page->offline=true;new_page->music_only=r.music_only;
+                xSemaphoreTake(mutex,portMAX_DELAY);incoming=new_page;new_page=NULL;preview_ready=true;xSemaphoreGive(mutex);
+            }
+        }
         if(r.type==1)snprintf(path,sizeof(path),"/v1/library?offset=%d&trash=%d&kind=%s",r.offset,r.trash,r.music_only?"music":"");
         else if(r.type==2)snprintf(path,sizeof(path),"/v1/library?id=%s&part=thumb",r.id);
         else strlcpy(path,"/v1/library",sizeof(path));
         snprintf(body,sizeof(body),"{\"id\":\"%s\",\"action\":\"%s\",\"value\":%s}",r.id,r.action,r.value?"true":"false");
         ok=device_api(path,r.type==3?body:NULL,data,capacity,&length)==ESP_OK;
         if(r.type==1) {
-            const char *cache=r.music_only?"/wallpaper/library-music.json":"/wallpaper/library.json";
-            if(!ok) {FILE *f=fopen(cache,"rb");if(f) {length=fread(data,1,capacity-1,f);data[length]=0;fclose(f);}else length=0;}
-            new_page=heap_caps_calloc(1,sizeof(page_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-            if(new_page) {parse_page(new_page,(char *)data);new_page->offline=!ok;new_page->music_only=r.music_only;}
-            if(ok) {FILE *f=fopen(cache,"wb");if(f){fwrite(data,1,length,f);fclose(f);}}
+            if(ok){
+                new_page=heap_caps_calloc(1,sizeof(page_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+                if(new_page&&parse_page(new_page,(char *)data)&&new_page->offset==r.offset&&new_page->trash==r.trash){
+                    new_page->music_only=r.music_only;
+                    if(cacheable)snapshot_save(cache,data,length+1,(uint32_t)time(NULL));
+                }else{free(new_page);new_page=NULL;ok=false;}
+            }
         } else if(r.type==2)ok=ok&&length==32768;
         else if(ok&&!strcmp(r.action,"select"))wallpaper_input_request_reload();
     }
     xSemaphoreTake(mutex,portMAX_DELAY);
-    incoming=new_page;if(r.type==2&&ok) {incoming_thumb=data;data=NULL;strlcpy(incoming_id,r.id,sizeof(incoming_id));}
+    if(new_page){free(incoming);incoming=new_page;}if(r.type==2&&ok) {incoming_thumb=data;data=NULL;strlcpy(incoming_id,r.id,sizeof(incoming_id));}
     success=ok;last_type=r.type;finished=true;
     xSemaphoreGive(mutex);heap_caps_free(data);vTaskDeleteWithCaps(NULL);
 }
@@ -103,10 +127,11 @@ static void render(void)
     bool has_thumb=item&&item->thumbnail&&thumbnail&&!strcmp(item->id,thumb_id);
     hidden(preview,!has_thumb);hidden(kind_label,has_thumb);
     lv_label_set_text(kind_label,item?(!strcmp(item->kind,"music")?LV_SYMBOL_AUDIO:!strcmp(item->kind,"story")?LV_SYMBOL_LIST:LV_SYMBOL_IMAGE):LV_SYMBOL_IMAGE);
-    if(has_thumb) {image.data=thumbnail;lv_image_set_src(preview,&image);}
+    if(has_thumb) {if(image.data!=thumbnail)lv_image_cache_drop(&image);image.data=thumbnail;lv_image_set_src(preview,&image);}
     hidden(favorite,!item||page->trash);hidden(use,!item);hidden(remove_button,!item||page->trash||item->selected);
     if(item) {set_button(favorite,item->favorite?"已收藏":"收藏");set_button(use,page->trash?"恢复":!strcmp(item->kind,"music")?(music_input_state().playing?"停止":"播放"):!strcmp(item->kind,"story")?"阅读":item->selected?"已应用":"应用");}
     hidden(confirm,!deleted_confirmation);
+    set_button(trash_toggle,page&&page->trash?"返回作品":"回收站");
     hidden(prev,!page||(!item_index&&!page->offset));hidden(next,!page||(item_index+1>=page->count&&!page->more));
 }
 static void request_thumb(void)
@@ -118,7 +143,7 @@ static void action(lv_event_t *event)
 {
     int a=(int)(intptr_t)lv_event_get_user_data(event);item_t *item=current();
     if(a==0) {go_home();return;}
-    if(busy)return;
+    if(busy&&a!=3&&a!=4)return;
     if(a==1)load_page(page?page->offset:0,page&&page->trash);
     else if(a==2)load_page(0,!(page&&page->trash));
     else if(a==3||a==4) {
@@ -150,23 +175,25 @@ static void tick(lv_timer_t *t)
 {
     (void)t;xSemaphoreTake(mutex,portMAX_DELAY);
     bool done=finished,ok=success;int type=last_type;
-    if(done) {
-        finished=false;busy=false;
+    bool preview=preview_ready;preview_ready=false;
+    if(done||preview) {
+        if(done){finished=false;busy=false;}
         if(incoming){
             if(incoming->music_only==music_only){heap_caps_free(page);page=incoming;item_index=0;}
             else {heap_caps_free(incoming);reload_on_finish=true;}
             incoming=NULL;
         }
-        if(incoming_thumb){heap_caps_free(thumbnail);thumbnail=incoming_thumb;incoming_thumb=NULL;strlcpy(thumb_id,incoming_id,sizeof(thumb_id));}
+        if(incoming_thumb){lv_image_cache_drop(&image);heap_caps_free(thumbnail);thumbnail=incoming_thumb;incoming_thumb=NULL;strlcpy(thumb_id,incoming_id,sizeof(thumb_id));}
     }
     xSemaphoreGive(mutex);
+    if(preview&&!done){strlcpy(message,"历史缓存 · 正在检查更新",sizeof(message));render();}
     if(done&&reload_on_finish){reload_on_finish=false;load_page(0,false);render();return;}
     if(done) {
         strlcpy(message,ok?(type==3?"操作已保存":"作品已同步"):(type==1?"离线 · 显示上次作品列表":"操作失败，请检查网络后重试"),sizeof(message));
         deleted_confirmation=false;
         if(type==3&&ok)load_page(page?page->offset:0,page&&page->trash);
         else if(type==1&&ok&&active)request_thumb();
-        if(!active){heap_caps_free(thumbnail);thumbnail=NULL;thumb_id[0]=0;}
+        if(!active){lv_image_cache_drop(&image);heap_caps_free(thumbnail);thumbnail=NULL;image.data=NULL;thumb_id[0]=0;}
         render();
     }
     bool playing=music_input_state().playing;
@@ -189,21 +216,21 @@ void library_app_set_active(bool enabled)
 {
     if(active==enabled)return;
     active=enabled;
-    if(!enabled){lv_obj_clean(view);heap_caps_free(thumbnail);thumbnail=NULL;thumb_id[0]=0;return;}
+    if(!enabled){lv_obj_clean(view);lv_image_cache_drop(&image);heap_caps_free(thumbnail);thumbnail=NULL;image.data=NULL;thumb_id[0]=0;return;}
     music_only=next_music_only;next_music_only=false;
     if(page&&page->music_only!=music_only){heap_caps_free(page);page=NULL;item_index=0;}
     if(busy)reload_on_finish=true;
     heading=label(view,"作品相册",73,34,320,title_font);status=label(view,"",55,73,356,body_font);
     title_label=label(view,"",65,99,336,body_font);lv_label_set_long_mode(title_label,LV_LABEL_LONG_DOT);lv_obj_set_height(title_label,50);
     preview=lv_image_create(view);lv_obj_set_pos(preview,169,150);kind_label=label(view,LV_SYMBOL_IMAGE,169,190,128,&lv_font_montserrat_48);
-    prev=button(LV_SYMBOL_LEFT,62,200,50,action,3);next=button(LV_SYMBOL_RIGHT,354,200,50,action,4);
+    prev=button(LV_SYMBOL_LEFT,55,200,64,action,3);next=button(LV_SYMBOL_RIGHT,347,200,64,action,4);
     lv_obj_set_style_text_font(lv_obj_get_child(prev,0),&lv_font_montserrat_20,0);
     lv_obj_set_style_text_font(lv_obj_get_child(next,0),&lv_font_montserrat_20,0);
-    date_label=label(view,"",60,280,346,body_font);
-    favorite=button("收藏",107,310,120,action,5);use=button("应用",239,310,120,action,6);
-    remove_button=button("移入回收站",123,359,220,action,7);confirm=button("确认移入？",123,359,220,action,8);
-    lv_obj_set_height(remove_button,34);lv_obj_set_height(confirm,34);
-    button("桌面",123,400,68,action,0);button("刷新",199,400,68,action,1);button("回收",275,400,68,action,2);
+    date_label=label(view,"",60,265,346,body_font);
+    favorite=button("收藏",83,292,144,action,5);use=button("应用",239,292,144,action,6);
+    remove_button=button("移入回收站",83,342,144,action,7);confirm=button("确认移入？",83,342,144,action,8);
+    trash_toggle=button("回收站",239,342,144,action,2);
+    button("桌面",123,392,104,action,0);button("刷新",239,392,104,action,1);
     load_page(page?page->offset:0,page&&page->trash);render();
 }
 void library_app_debug(cJSON *root)

@@ -967,7 +967,7 @@ class WallpaperHandler(BaseHTTPRequestHandler):
                 if len(raw)!=length:raise ValueError('incomplete request')
                 value=json.loads(raw)
                 if not isinstance(value,dict):raise ValueError('invalid body')
-                self.send_json(HTTPStatus.OK,pet_service.start(value.get('requestId'),value.get('text')))
+                self.send_json(HTTPStatus.OK,pet_service.start(value.get('requestId'),value.get('text'),value.get('pet','cat')))
             except (ValueError,TypeError):self.send_error(HTTPStatus.BAD_REQUEST)
             except BlockingIOError:self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
             except OSError:self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)

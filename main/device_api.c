@@ -1,4 +1,5 @@
 #include "device_api.h"
+#include "wifi_setup.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -11,6 +12,11 @@ extern const uint8_t key[] asm("_binary_device_client_key_start");
 esp_err_t device_api(const char *path,const char *json,void *output,size_t capacity,size_t *length)
 {
     if(!path || strncmp(path,"/v1/",4) || !output || capacity<2) return ESP_ERR_INVALID_ARG;
+    ((char *)output)[0]=0;if(length)*length=0;
+    if(!wifi_setup_has_ip())return ESP_ERR_INVALID_STATE;
+#if CONFIG_ROUND_CLOCK_USB_TEST_BRIDGE
+    if(wifi_setup_test_service_blocked())return ESP_ERR_TIMEOUT;
+#endif
     char url[256];if(snprintf(url,sizeof(url),CLOCK_API_BASE "%s",path)>=(int)sizeof(url))return ESP_ERR_INVALID_SIZE;
     esp_http_client_config_t cfg={.url=url,.timeout_ms=15000,.buffer_size=2048,
         .cert_pem=(char *)ca,.client_cert_pem=(char *)cert,.client_key_pem=(char *)key,.disable_auto_redirect=true};

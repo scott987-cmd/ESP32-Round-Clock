@@ -7,6 +7,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
@@ -179,6 +180,21 @@ static void screenshot_task(void *context)
                     write_all((const uint8_t *)"\n", 1);
                 } else send_error();
                 heap_caps_free(state);
+            }
+            else if(!strcmp(command,"RCNETBOOT")){
+                esp_err_t result=wifi_setup_test_offline_boot();
+                write_all((const uint8_t *)(result==ESP_OK?"RCOK":"RCER"),4);
+                if(result==ESP_OK){vTaskDelay(pdMS_TO_TICKS(300));esp_restart();}
+            }
+            else if(!strcmp(command,"RCAPIFAIL")||!strcmp(command,"RCAPIOK")){
+                wifi_setup_test_block_service(!strcmp(command,"RCAPIFAIL"));write_all((const uint8_t *)"RCOK",4);
+            }
+            else if(!strcmp(command,"RCPORTAL")){
+                write_all((const uint8_t *)(wifi_setup_portal()==ESP_OK?"RCOK":"RCER"),4);
+            }
+            else if (!strcmp(command,"RCNETOFF")||!strcmp(command,"RCNETON")) {
+                esp_err_t result=wifi_setup_test_offline(!strcmp(command,"RCNETOFF"));
+                write_all((const uint8_t *)(result==ESP_OK?"RCOK":"RCER"),4);
             }
             else if (strcmp(command, "RCSHOT") == 0) {
                 capture_and_send();

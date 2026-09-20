@@ -8,3 +8,4 @@ bool content_assets_ready(void);
 esp_err_t content_read(uint32_t offset,void *target,size_t bytes);
 bool content_picture(unsigned word,unsigned size,uint8_t *target);
 esp_err_t content_word_play(unsigned word);
+bool content_pet_picture(unsigned pet,uint8_t *target);

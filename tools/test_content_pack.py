@@ -10,11 +10,21 @@ class ContentTests(unittest.TestCase):
         english=(ROOT/'main/assets/english/english.bin').read_bytes();self.assertEqual(data[16:16+len(english)],english)
     def test_all_builtin_audio_ranges_and_non_silent_pcm(self):
         data=(ROOT/'main/assets/content.bin').read_bytes();header=(ROOT/'main/content_index.h').read_text()
-        entries=re.findall(r',([0-9]+),([0-9]+)\}',header);self.assertEqual(len(entries),5)
+        story_block=header.split('static const story_node_t builtin_story[]={',1)[1].split('};',1)[0]
+        entries=re.findall(r',([0-9]+),([0-9]+)\}',story_block);self.assertEqual(len(entries),5)
         for i,(start,size) in enumerate(entries):
             start,size=int(start),int(size);self.assertEqual(size%2,0);self.assertLessEqual(start+size,len(data))
             pcm=data[start:start+size];self.assertEqual(pcm,(ROOT/f'main/assets/stories/builtin-{i}.pcm').read_bytes())
             samples=struct.unpack('<'+'h'*(size//2),pcm);self.assertGreater(max(map(abs,samples)),1000)
+    def test_all_pet_sprites_decode_to_rgb565(self):
+        data=(ROOT/'main/assets/content.bin').read_bytes();header=(ROOT/'main/content_index.h').read_text()
+        pet_block=header.split('static const pet_asset_t builtin_pets[PET_ASSET_COUNT]={',1)[1].split('};',1)[0]
+        entries=re.findall(r'\{"[^"]+","[^"]+",([0-9]+),([0-9]+)\}',pet_block)
+        self.assertEqual(len(entries),4)
+        for start,size in entries:
+            start,size=int(start),int(size);self.assertLessEqual(start+size,len(data))
+            raw=zlib.decompress(data[start:start+size]);self.assertEqual(len(raw),220*220*2)
+            self.assertGreater(len(set(raw)),32)
     def test_existing_partition_offsets_unchanged(self):
         def number(value):
             value=value.strip().upper()

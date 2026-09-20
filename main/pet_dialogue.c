@@ -18,6 +18,8 @@ static pet_dialogue_state_t state;
 static char transcript[1201];
 static uint8_t *pcm;
 static uint32_t playback_sequence;
+static unsigned pet_kind,request_pet_kind;
+static const char *pet_kinds[]={"cat","dog","parrot","frog"};
 static const char *str(cJSON *j,const char *k){cJSON *v=cJSON_GetObjectItem(j,k);return cJSON_IsString(v)?v->valuestring:"";}
 pet_dialogue_state_t pet_dialogue_state(void)
 {
@@ -34,6 +36,7 @@ static void worker(void *arg)
     (void)arg;char id[33],path[96],response[2048];size_t length=0;
     snprintf(id,sizeof(id),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
     cJSON *body=cJSON_CreateObject();cJSON_AddStringToObject(body,"requestId",id);cJSON_AddStringToObject(body,"text",transcript);
+    cJSON_AddStringToObject(body,"pet",pet_kinds[request_pet_kind<4?request_pet_kind:0]);
     char *request=cJSON_PrintUnformatted(body);cJSON_Delete(body);
     esp_err_t result=request?device_api("/v1/pet",request,response,sizeof(response),&length):ESP_ERR_NO_MEM;
     cJSON_free(request);memset(transcript,0,sizeof(transcript));
@@ -41,7 +44,7 @@ static void worker(void *arg)
     pet_dialogue_state_t next={.phase=PET_READY};char hash[65]={0};bool ready=false;
     /* No automatic resubmission of a paid model request after a timeout. */
     int64_t deadline=esp_timer_get_time()+180000000;
-    for(unsigned attempt=0;result==ESP_OK&&attempt<100&&esp_timer_get_time()<deadline;attempt++) {
+    for(unsigned attempt=0;result==ESP_OK&&attempt<360&&esp_timer_get_time()<deadline;attempt++) {
         cJSON *j=cJSON_Parse(response);
         if(!j){result=ESP_FAIL;break;}
         const char *status=str(j,"status");
@@ -55,7 +58,7 @@ static void worker(void *arg)
         }
         bool working=!strcmp(status,"working");cJSON_Delete(j);
         if(!working){result=ESP_FAIL;break;}
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(500));
         result=device_api(path,NULL,response,sizeof(response),&length);
     }
     if(ready) {
@@ -75,8 +78,19 @@ static void recognized(const char *text,void *context)
     (void)context;
     if(!text||!*text||strlen(text)>=sizeof(transcript)){failed("没有听清，请靠近一点再说");return;}
     strlcpy(transcript,text,sizeof(transcript));
-    taskENTER_CRITICAL(&mux);state.phase=PET_THINKING;taskEXIT_CRITICAL(&mux);
+    taskENTER_CRITICAL(&mux);state.phase=PET_THINKING;request_pet_kind=pet_kind;taskEXIT_CRITICAL(&mux);
     if(xTaskCreateWithCaps(worker,"pet_reply",8192,NULL,3,NULL,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)!=pdPASS)failed("内存正忙，请稍后再试");
+}
+void pet_dialogue_set_pet(unsigned kind)
+{
+    if(kind>=4)return;
+    bool changed=false;
+    taskENTER_CRITICAL(&mux);
+    if(state.phase!=PET_LISTENING&&state.phase!=PET_THINKING&&pet_kind!=kind){
+        pet_kind=kind;state.phase=PET_IDLE;state.reply[0]=0;state.action=0;state.bytes=0;changed=true;
+    }
+    taskEXIT_CRITICAL(&mux);
+    if(changed)audio_local_stop(playback_sequence);
 }
 static bool reserve(void)
 {

@@ -1,4 +1,5 @@
 #pragma once
+void music_input_restore_cached(void);
 
 #include <stdbool.h>
 #include <stdint.h>

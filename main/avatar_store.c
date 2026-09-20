@@ -16,6 +16,7 @@
 #include "nvs.h"
 
 #include "avatar_store.h"
+#include "wifi_setup.h"
 #include "service_config.h"
 
 #define PHOTO_SLOT_AUTO 0xFF
@@ -179,6 +180,7 @@ esp_err_t avatar_store_load_face(uint8_t slot,uint8_t *target,avatar_region_t re
 }
 static int fetch(const char *path,uint8_t *data,int capacity)
 {
+    if(!wifi_setup_has_ip())return -1;
     char url[256]; snprintf(url,sizeof(url),CLOCK_API_BASE "%s",path);
     esp_http_client_config_t cfg={.url=url,.timeout_ms=15000,.buffer_size=2048,
         .disable_auto_redirect=true,.cert_pem=(const char *)device_ca_start,

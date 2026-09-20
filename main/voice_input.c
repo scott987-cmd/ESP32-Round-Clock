@@ -16,6 +16,7 @@
 
 #include "voice_input.h"
 #include "service_config.h"
+#include "wifi_setup.h"
 
 #define VOICE_SAMPLE_RATE 16000
 #define VOICE_MAX_SECONDS 20
@@ -275,6 +276,7 @@ esp_err_t voice_input_start(void)
 esp_err_t voice_input_start_with_callback(voice_input_transcript_cb_t callback,
                                           void *context)
 {
+    if(!wifi_setup_has_ip()){set_voice_status("OFFLINE - CONNECT WI-FI");return ESP_ERR_INVALID_STATE;}
     if (voice_state != VOICE_IDLE) {
         return ESP_ERR_INVALID_STATE;
     }
